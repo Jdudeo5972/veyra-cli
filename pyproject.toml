@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "veyra"
+version = "0.1.0"
+description = "Lightweight CLI for local ONNX causal language models."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "onnxruntime",
+  "tokenizers",
+  "huggingface_hub",
+  "numpy",
+  "prompt_toolkit",
+]
+
+[project.scripts]
+veyra = "veyra.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["veyra"]
