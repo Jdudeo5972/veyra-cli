@@ -17,7 +17,7 @@ from .hf import download_model, list_veyra_models, registry_entry
 from .inspect import format_inspection, inspect_model
 from .prompts import format_prompt
 from .registry import HISTORY_PATH, current_model_entry, load_config, models, register_model, remove_model, safe_model_name, save_config
-from .runner import OnnxCausalLMRunner, UnsupportedModelError
+from .runner import OnnxCausalLMRunner, UnsupportedModelError, available_devices, device_rows, normalize_device, provider_for_device
 from .theme import THEMES, get_theme, normalize_theme
 
 
@@ -133,7 +133,7 @@ class VeyraShell:
             self.command_hint("Use", ["/model fetch"], "to find ONNX models from veyra-ai.")
             self.command_hint("Use", ["/model add PATH"], "to add a local ONNX model.")
             return
-        self.command_hint("type", ["/help", "/model", "/mode", "/chat", "/exit"], "")
+        self.command_hint("type", ["/help", "/model", "/mode", "/device", "/chat", "/exit"], "")
 
     def banner_segments(self, state: str) -> list[list[tuple[str, str]]]:
         defaults = self.config.get("defaults", {})
@@ -168,7 +168,7 @@ class VeyraShell:
         if not entry:
             return False
         try:
-            self.runner = OnnxCausalLMRunner(entry["path"])
+            self.runner = OnnxCausalLMRunner(entry["path"], device=self.config.get("device", "cpu"))
             self.load_error = None
             return True
         except Exception as exc:
@@ -224,6 +224,8 @@ class VeyraShell:
             self.mode_command(args)
         elif cmd == "/theme":
             self.theme_command(args)
+        elif cmd == "/device":
+            self.device_command(args)
         elif cmd == "/autoload":
             self.autoload_command(args)
         elif cmd in {"/temp", "/tokens", "/topk", "/topp", "/repetition"}:
@@ -244,6 +246,7 @@ class VeyraShell:
             ("/model", "[list|use|fetch|refresh|update|add|inspect|remove]"),
             ("/mode", "[base|chatml]"),
             ("/theme", "[list|veyra|warm|green|blue|mono]"),
+            ("/device", "[list|cpu|cuda|directml|coreml|openvino|rocm|tensorrt]"),
             ("/autoload", "[on|off]"),
             ("/temp", "VALUE  /tokens N  /topk N  /topp VALUE  /repetition VALUE"),
             ("/system", "TEXT  /update"),
@@ -261,6 +264,7 @@ class VeyraShell:
         self.banner(state)
         if show_chat:
             print(self.theme.text("label", "chat   ") + self.theme.text("value", str(self.chat.path if self.chat else "none")))
+            print(self.theme.text("label", "device ") + self.theme.text("value", normalize_device(self.config.get("device"))))
 
     def theme_command(self, args: list[str]) -> None:
         if not args:
@@ -281,6 +285,44 @@ class VeyraShell:
         self.clear_visible_screen()
         self.status(show_chat=False)
         self.success(f"theme: {selected}")
+
+    def device_command(self, args: list[str]) -> None:
+        current = normalize_device(self.config.get("device"))
+        if not args:
+            print(self.theme.text("label", "device ") + self.theme.text("value", current))
+            available = available_devices()
+            print(self.theme.text("muted", "available: ") + " ".join(self.theme.text("command", name) for name in available))
+            return
+        if args[0] == "list":
+            for name, provider, is_available in device_rows():
+                mark = "*" if name == current else " "
+                status = "available" if is_available else "unavailable"
+                role = "success" if is_available else "muted"
+                print(
+                    f"{mark} "
+                    + self.theme.text("command", name.ljust(8))
+                    + " "
+                    + self.theme.text(role, status.ljust(11))
+                    + " "
+                    + self.theme.text("muted", provider)
+                )
+            return
+        selected = normalize_device(args[0])
+        if selected != args[0].lower() and args[0].lower() not in {"gpu", "dml"}:
+            self.error(f"Unknown device: {args[0]}")
+            self.warn("Valid devices: " + ", ".join(name for name, _, _ in device_rows()))
+            return
+        available = available_devices()
+        if selected not in available:
+            self.error(f"Device '{selected}' is not available in this ONNX Runtime install.")
+            self.warn("Available devices: " + ", ".join(available or ["none"]))
+            return
+        self.config["device"] = selected
+        save_config(self.config)
+        self.runner = None
+        if models(self.config) and self.config.get("current_model"):
+            self.load_current_model()
+        self.success(f"device: {selected} ({provider_for_device(selected)})")
 
     def model_command(self, args: list[str]) -> None:
         if not args:

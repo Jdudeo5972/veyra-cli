@@ -9,6 +9,7 @@ TOP = {
     "/mode": "Show or change prompt mode",
     "/chat": "Manage saved chats",
     "/theme": "Change CLI color theme",
+    "/device": "Select ONNX Runtime device",
     "/autoload": "Toggle model autoload on startup",
     "/temp": "Set or show sampling temperature",
     "/tokens": "Set or show max new tokens",
@@ -44,6 +45,16 @@ THEME = {
     "green": "Green terminal theme",
     "blue": "Blue and cyan theme",
     "mono": "No decorative colors",
+}
+DEVICE = {
+    "list": "List available devices",
+    "cpu": "CPU execution provider",
+    "cuda": "NVIDIA CUDA provider",
+    "directml": "Windows DirectML provider",
+    "coreml": "Apple Core ML provider",
+    "openvino": "Intel OpenVINO provider",
+    "rocm": "AMD ROCm provider",
+    "tensorrt": "NVIDIA TensorRT provider",
 }
 CHAT = {
     "new": "Start a new chat",
@@ -94,6 +105,8 @@ class VeyraCompleter(Completer):
             yield from _dict_completions(AUTOLOAD, current, start)
         elif command == "/theme" and len(parts) == 2:
             yield from _dict_completions(THEME, current, start)
+        elif command == "/device" and len(parts) == 2:
+            yield from _dict_completions(DEVICE, current, start)
         elif command == "/chat" and len(parts) == 2:
             yield from _dict_completions(CHAT, current, start)
         elif command == "/chat" and len(parts) == 3 and parts[1] in {"load", "rename"}:

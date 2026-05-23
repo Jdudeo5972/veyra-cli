@@ -10,6 +10,17 @@ from tokenizers import Tokenizer
 from .inspect import SUPPORTED_INPUTS, find_onnx_file, is_past_input, missing_cache_fields, parse_cache_name
 
 
+DEVICE_PROVIDERS = {
+    "cpu": "CPUExecutionProvider",
+    "cuda": "CUDAExecutionProvider",
+    "directml": "DmlExecutionProvider",
+    "coreml": "CoreMLExecutionProvider",
+    "openvino": "OpenVINOExecutionProvider",
+    "rocm": "ROCMExecutionProvider",
+    "tensorrt": "TensorrtExecutionProvider",
+}
+
+
 class UnsupportedModelError(RuntimeError):
     def __init__(self, unsupported_inputs: list[str]) -> None:
         self.unsupported_inputs = unsupported_inputs
@@ -29,7 +40,7 @@ class CacheOutputError(RuntimeError):
 
 
 class OnnxCausalLMRunner:
-    def __init__(self, model_dir: str | Path, threads: int = 2) -> None:
+    def __init__(self, model_dir: str | Path, threads: int = 2, device: str = "cpu") -> None:
         try:
             import onnxruntime as ort
         except ImportError as exc:
@@ -49,7 +60,15 @@ class OnnxCausalLMRunner:
         opts.intra_op_num_threads = max(1, int(threads or 2))
         opts.inter_op_num_threads = 1
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        self.session = ort.InferenceSession(str(self.onnx_path), sess_options=opts, providers=["CPUExecutionProvider"])
+        self.device = normalize_device(device)
+        provider = provider_for_device(self.device)
+        available = ort.get_available_providers()
+        if provider not in available:
+            raise RuntimeError(
+                f"Device '{self.device}' requires ONNX Runtime provider {provider}, but it is not available. "
+                f"Available devices: {', '.join(available_devices())}"
+            )
+        self.session = ort.InferenceSession(str(self.onnx_path), sess_options=opts, providers=[provider])
         self.inputs = self.session.get_inputs()
         self.outputs = self.session.get_outputs()
         self.input_by_name = {i.name: i for i in self.inputs}
@@ -303,3 +322,32 @@ def _numpy_dtype(name: Any) -> np.dtype:
     if str(name).lower() in {"bfloat16", "bf16"}:
         return np.dtype(np.float32)
     return np.dtype(np.float32)
+
+
+def normalize_device(name: str | None) -> str:
+    value = str(name or "cpu").strip().lower()
+    aliases = {"gpu": "cuda", "dml": "directml"}
+    value = aliases.get(value, value)
+    return value if value in DEVICE_PROVIDERS else "cpu"
+
+
+def provider_for_device(name: str | None) -> str:
+    return DEVICE_PROVIDERS[normalize_device(name)]
+
+
+def available_devices() -> list[str]:
+    try:
+        import onnxruntime as ort
+    except ImportError:
+        return []
+    providers = set(ort.get_available_providers())
+    return [name for name, provider in DEVICE_PROVIDERS.items() if provider in providers]
+
+
+def device_rows() -> list[tuple[str, str, bool]]:
+    try:
+        import onnxruntime as ort
+        providers = set(ort.get_available_providers())
+    except ImportError:
+        providers = set()
+    return [(name, provider, provider in providers) for name, provider in DEVICE_PROVIDERS.items()]

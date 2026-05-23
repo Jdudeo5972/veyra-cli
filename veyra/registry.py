@@ -31,6 +31,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "version": 1,
     "autoload": True,
     "theme": "veyra",
+    "device": "cpu",
     "current_model": None,
     "current_mode": "chatml",
     "defaults": {
@@ -74,7 +75,9 @@ def load_config() -> dict[str, Any]:
         config["theme"] = "blue"
     elif theme not in {"veyra", "warm", "green", "blue", "mono"}:
         config["theme"] = "veyra"
-    if loaded.get("theme") != config.get("theme"):
+    if config.get("device") not in {"cpu", "cuda", "directml", "coreml", "openvino", "rocm", "tensorrt"}:
+        config["device"] = "cpu"
+    if loaded.get("theme") != config.get("theme") or loaded.get("device") != config.get("device"):
         save_config(config)
     return config
 

@@ -58,7 +58,7 @@ def run_prompt(prompt: str) -> int:
         return 1
     mode = config.get("current_mode", "chatml")
     formatted = format_prompt(prompt, mode)
-    runner = OnnxCausalLMRunner(entry["path"])
+    runner = OnnxCausalLMRunner(entry["path"], device=config.get("device", "cpu"))
     for delta in runner.generate(formatted, **config.get("defaults", {})):
         print(delta, end="", flush=True)
     print("")
