@@ -66,7 +66,7 @@ class OnnxCausalLMRunner:
         if provider not in available:
             raise RuntimeError(
                 f"Device '{self.device}' requires ONNX Runtime provider {provider}, but it is not available. "
-                f"Available devices: {', '.join(available_devices())}"
+                f"Available devices: {', '.join(available_devices())}. {device_install_hint(self.device)}"
             )
         self.session = ort.InferenceSession(str(self.onnx_path), sess_options=opts, providers=[provider])
         self.inputs = self.session.get_inputs()
@@ -351,3 +351,22 @@ def device_rows() -> list[tuple[str, str, bool]]:
     except ImportError:
         providers = set()
     return [(name, provider, provider in providers) for name, provider in DEVICE_PROVIDERS.items()]
+
+
+def device_install_hint(name: str | None) -> str:
+    device = normalize_device(name)
+    if device == "cpu":
+        return "CPU should be available with the standard onnxruntime package."
+    if device == "cuda":
+        return "Install a CUDA-enabled ONNX Runtime build, usually `onnxruntime-gpu`, plus compatible NVIDIA CUDA/cuDNN drivers."
+    if device == "directml":
+        return "Install a DirectML-enabled ONNX Runtime build, usually `onnxruntime-directml` on Windows."
+    if device == "openvino":
+        return "Install an OpenVINO-enabled ONNX Runtime build for Intel acceleration."
+    if device == "rocm":
+        return "Install a ROCm-enabled ONNX Runtime build for AMD GPU acceleration."
+    if device == "tensorrt":
+        return "Install a TensorRT-enabled ONNX Runtime build and NVIDIA TensorRT runtime."
+    if device == "coreml":
+        return "Use an ONNX Runtime build that includes CoreMLExecutionProvider on macOS."
+    return ""

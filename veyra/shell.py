@@ -17,7 +17,7 @@ from .hf import download_model, list_veyra_models, registry_entry
 from .inspect import format_inspection, inspect_model
 from .prompts import format_prompt
 from .registry import HISTORY_PATH, current_model_entry, load_config, models, register_model, remove_model, safe_model_name, save_config
-from .runner import OnnxCausalLMRunner, UnsupportedModelError, available_devices, device_rows, normalize_device, provider_for_device
+from .runner import OnnxCausalLMRunner, UnsupportedModelError, available_devices, device_install_hint, device_rows, normalize_device, provider_for_device
 from .theme import THEMES, get_theme, normalize_theme
 
 
@@ -316,6 +316,7 @@ class VeyraShell:
         if selected not in available:
             self.error(f"Device '{selected}' is not available in this ONNX Runtime install.")
             self.warn("Available devices: " + ", ".join(available or ["none"]))
+            self.warn(device_install_hint(selected))
             return
         self.config["device"] = selected
         save_config(self.config)

@@ -68,6 +68,10 @@ Prompt history is stored at `~/.local/state/veyra/history.txt`.
 
 Veyra uses CPU-only ONNX Runtime by default with small thread counts: two intra-op threads and one inter-op thread. Int8 ONNX models are recommended. Full-sequence re-evaluation is used in v0, so the first generation and longer responses may be slow on small CPUs.
 
+## Devices
+
+Veyra defaults to CPU. Use `/device list` in the shell to see ONNX Runtime execution providers available in your current Python environment. CUDA requires a CUDA-enabled ONNX Runtime build, typically `onnxruntime-gpu`, plus compatible NVIDIA drivers/CUDA/cuDNN.
+
 ## Model Architecture
 
 Veyra2 currently uses Llama-style model config. Veyra3 may use a Gemma-family config. The CLI treats architecture as metadata and uses ONNX graph inputs and outputs as the source of truth wherever possible. Current supported causal LM inputs are `input_ids`, `attention_mask`, and `position_ids`; unsupported required inputs are reported clearly by `veyra inspect`.
