@@ -16,6 +16,11 @@ dependencies = [
   "prompt_toolkit",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Jdudeo5972/veyra-cli"
+Repository = "https://github.com/Jdudeo5972/veyra-cli"
+Issues = "https://github.com/Jdudeo5972/veyra-cli/issues"
+
 [project.scripts]
 veyra = "veyra.__main__:main"
 

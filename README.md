@@ -2,6 +2,8 @@
 
 `veyra` is a lightweight Python CLI for running local ONNX causal language models on CPU-first machines, including Raspberry Pi-class hardware. It opens a polished REPL with slash commands, history, autocomplete, and simple streaming output.
 
+Repository: [Jdudeo5972/veyra-cli](https://github.com/Jdudeo5972/veyra-cli)
+
 ## Install
 
 ```bash
