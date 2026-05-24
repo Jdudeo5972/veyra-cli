@@ -553,7 +553,8 @@ class VeyraShell:
         elapsed = max(0.0, end - start)
         ttft = 0.0 if first_token_at is None else max(0.0, first_token_at - start)
         speed = generated_tokens / elapsed if elapsed > 0 and generated_tokens else 0.0
-        text = f"stats: {generated_tokens} tokens | {speed:.2f} tok/s | first token {ttft:.2f}s"
+        device = normalize_device(self.config.get("device"))
+        text = f"stats: {generated_tokens} tokens | {speed:.2f} tok/s | first token {ttft:.2f}s | total {elapsed:.2f}s | device {device}"
         print(self.theme.text("muted", text))
 
     def clear_visible_screen(self, force: bool = False) -> None:
@@ -565,10 +566,9 @@ def update_message(theme=None) -> None:
     def style(role: str, value: str) -> str:
         return theme.text(role, value) if theme else value
 
-    print(style("muted", "To update Veyra, use one of:"))
-    print("  " + style("command", "uv tool upgrade veyra"))
-    print("  " + style("command", "pipx upgrade veyra"))
-    print(style("muted", "For a source install, pull the latest source and reinstall with `uv tool install .`."))
+    print(style("muted", "Install the latest Veyra CLI from GitHub with one of:"))
+    print("  " + style("command", "uv tool install git+https://github.com/Jdudeo5972/veyra-cli.git"))
+    print("  " + style("command", "pipx install git+https://github.com/Jdudeo5972/veyra-cli.git"))
 
 
 def _prefer_utf8_stdio() -> None:
