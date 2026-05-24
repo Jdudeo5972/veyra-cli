@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -16,7 +17,7 @@ from .chat_store import ChatStore
 from .completion import VeyraCompleter
 from .hf import download_model, list_veyra_models, registry_entry
 from .inspect import format_inspection, inspect_model
-from .prompts import format_prompt
+from .prompts import PROMPT_MODES, format_prompt, infer_prompt_mode, normalize_mode
 from .registry import HISTORY_PATH, current_model_entry, load_config, models, register_model, remove_model, safe_model_name, save_config
 from .runner import OnnxCausalLMRunner, UnsupportedModelError, available_devices, device_install_hint, device_rows, normalize_device, provider_for_device
 from .theme import THEMES, get_theme, normalize_theme
@@ -255,7 +256,7 @@ class VeyraShell:
     def help(self) -> None:
         rows = [
             ("/model", "[list|use|fetch|refresh|update|add|inspect|remove]"),
-            ("/mode", "[base|chatml]"),
+            ("/mode", "[base|chatml|qwen|gemma|mistral|llama3]"),
             ("/theme", "[list|veyra|warm|green|blue|mono]"),
             ("/device", "[list|cpu|cuda|directml|coreml|openvino|rocm|tensorrt]"),
             ("/stats", "[on|off]"),
@@ -459,7 +460,7 @@ class VeyraShell:
                 "path": str(info.model_dir),
                 "runtime": "onnx",
                 "architecture": info.model_type or info.architecture or "unknown",
-                "mode": self.config.get("current_mode", "chatml"),
+                "mode": infer_prompt_mode(info_config(info.model_dir), info_config(info.model_dir, "tokenizer_config.json")),
                 "quantized": "int8" in info.onnx_path.name.lower(),
             }
             register_model(self.config, model_name, entry)
@@ -480,14 +481,15 @@ class VeyraShell:
         if not args:
             print(self.theme.text("label", "mode   ") + self.theme.text("value", self.config.get("current_mode", "chatml")))
             return
-        if args[0] not in {"base", "chatml"}:
-            self.warn("Usage: /mode [base|chatml]")
+        mode = normalize_mode(args[0])
+        if args[0] != mode and args[0] not in PROMPT_MODES:
+            self.warn("Usage: /mode [base|chatml|qwen|gemma|mistral|llama3]")
             return
-        self.config["current_mode"] = args[0]
+        self.config["current_mode"] = mode
         save_config(self.config)
         if self.chat:
-            self.chat.append({"type": "event", "name": "mode_changed", "value": args[0]})
-        self.success(f"mode: {args[0]}")
+            self.chat.append({"type": "event", "name": "mode_changed", "value": mode})
+        self.success(f"mode: {mode}")
 
     def autoload_command(self, args: list[str]) -> None:
         if not args:
@@ -579,3 +581,11 @@ def _prefer_utf8_stdio() -> None:
                 reconfigure(encoding="utf-8")
             except Exception:
                 pass
+
+
+def info_config(model_dir: Path, name: str = "config.json") -> dict:
+    try:
+        with (model_dir / name).open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}

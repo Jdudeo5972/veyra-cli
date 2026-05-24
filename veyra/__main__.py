@@ -5,7 +5,7 @@ import sys
 
 from .hf import download_model, list_veyra_models, registry_entry
 from .inspect import format_inspection, inspect_model
-from .prompts import format_prompt
+from .prompts import format_prompt, infer_prompt_mode
 from .registry import load_config, register_model, safe_model_name
 from .runner import OnnxCausalLMRunner
 from .shell import VeyraShell, update_message
@@ -119,12 +119,21 @@ def add_cmd(argv: list[str]) -> int:
         "path": str(info.model_dir),
         "runtime": "onnx",
         "architecture": info.model_type or info.architecture or "unknown",
-        "mode": config.get("current_mode", "chatml"),
+        "mode": infer_prompt_mode(_read_json(info.model_dir / "config.json"), _read_json(info.model_dir / "tokenizer_config.json")),
         "quantized": "int8" in info.onnx_path.name.lower(),
     }
     register_model(config, name, entry)
     print(f"Added and selected {name}.")
     return 0
+
+
+def _read_json(path):
+    try:
+        import json
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def inspect_cmd(argv: list[str]) -> int:

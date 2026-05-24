@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any
 
 
-SUPPORTED_INPUTS = {"input_ids", "attention_mask", "position_ids"}
+SUPPORTED_INPUTS = {"input_ids", "inputs_embeds", "attention_mask", "position_ids", "num_logits_to_keep"}
 PAST_RE = re.compile(r"^past_key_values\.(\d+)\.(key|value)$")
 PRESENT_RE = re.compile(r"^(?:present|present_key_values|past_key_values)\.(\d+)\.(key|value)$")
+STATE_RE = re.compile(r"^past_(conv|recurrent)\.(\d+)$")
 CACHE_CONFIG_FIELDS = ("num_hidden_layers", "num_key_value_heads", "head_dim")
 
 
@@ -83,7 +84,7 @@ def inspect_model(model_dir: str | Path) -> ModelInspection:
     unsupported = [
         i.name
         for i in inputs
-        if i.required and i.name not in SUPPORTED_INPUTS and not is_past_input(i.name)
+        if i.required and i.name not in SUPPORTED_INPUTS and not is_past_input(i.name) and not is_state_input(i.name)
     ]
     missing_cache_config = missing_cache_fields(config) if cache_inputs else []
     return ModelInspection(
@@ -165,7 +166,25 @@ def parse_cache_name(name: str) -> tuple[int, str] | None:
 
 
 def missing_cache_fields(config: dict[str, Any]) -> list[str]:
-    return [field for field in CACHE_CONFIG_FIELDS if not isinstance(config.get(field), int)]
+    return [field for field in CACHE_CONFIG_FIELDS if not isinstance(_config_value(config, field), int)]
+
+
+def is_state_input(name: str) -> bool:
+    return STATE_RE.match(name) is not None
+
+
+def _config_value(config: dict[str, Any], field: str) -> Any:
+    if isinstance(config.get(field), int):
+        return config[field]
+    text_config = config.get("text_config")
+    if isinstance(text_config, dict) and isinstance(text_config.get(field), int):
+        return text_config[field]
+    if field == "head_dim":
+        hidden = _config_value(config, "hidden_size")
+        heads = _config_value(config, "num_attention_heads")
+        if isinstance(hidden, int) and isinstance(heads, int) and heads:
+            return hidden // heads
+    return config.get(field)
 
 
 def _read_json(path: Path) -> dict[str, Any]:

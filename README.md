@@ -36,6 +36,10 @@ Inside the shell:
 /model use NAME
 /mode base
 /mode chatml
+/mode qwen
+/mode gemma
+/mode mistral
+/mode llama3
 /chat list
 /chat export markdown
 ```
@@ -44,13 +48,15 @@ Inside the shell:
 
 Base mode sends the user text directly to the model as a raw completion prompt.
 
-ChatML mode formats prompts like:
+ChatML and Qwen modes format prompts like:
 
 ```text
 <|im_start|>user
 Hello<|im_end|>
 <|im_start|>assistant
 ```
+
+Gemma mode uses `<start_of_turn>user` / `<start_of_turn>model` turns. Mistral mode uses `[INST] ... [/INST]`. Llama 3 mode uses the `<|start_header_id|>` chat header format.
 
 If a system prompt is set with `/system TEXT`, it is placed before the user turn.
 
@@ -74,7 +80,7 @@ Veyra defaults to CPU. Use `/device list` in the shell to see ONNX Runtime execu
 
 ## Model Architecture
 
-Veyra2 currently uses Llama-style model config. Veyra3 may use a Gemma-family config. The CLI treats architecture as metadata and uses ONNX graph inputs and outputs as the source of truth wherever possible. Current supported causal LM inputs are `input_ids`, `attention_mask`, and `position_ids`; unsupported required inputs are reported clearly by `veyra inspect`.
+Veyra2 currently uses Llama-style model config. Veyra3 may use a Gemma-family config. The CLI treats architecture as metadata and uses ONNX graph inputs and outputs as the source of truth wherever possible. It supports standard decoder-only cached exports, Gemma-style exports, Qwen2/2.5/3-style cached exports, and split Qwen3.5/Next-style exports that use `inputs_embeds`, `embed_tokens.onnx`, and recurrent/conv cache state. Unsupported required inputs are reported clearly by `veyra inspect`.
 
 ## Updating
 

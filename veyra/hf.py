@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .inspect import inspect_model
+from .prompts import infer_prompt_mode
 from .registry import MODELS_DIR, safe_model_name
 
 
@@ -66,6 +67,8 @@ def download_model(repo_id: str, revision: str = "main") -> tuple[Path, str | No
 def registry_entry(repo_id: str, path: str | Path, revision: str = "main", commit: str | None = None) -> dict[str, Any]:
     info = inspect_model(path)
     model_type = info.model_type or (info.architecture or "unknown").lower()
+    config = _read_json(Path(path) / "config.json")
+    tokenizer_config = _read_json(Path(path) / "tokenizer_config.json")
     return {
         "source": "huggingface",
         "repo_id": repo_id,
@@ -74,6 +77,15 @@ def registry_entry(repo_id: str, path: str | Path, revision: str = "main", commi
         "path": str(Path(path).expanduser().resolve()),
         "runtime": "onnx",
         "architecture": model_type,
-        "mode": "chatml",
+        "mode": infer_prompt_mode(config, tokenizer_config),
         "quantized": "int8" in repo_id.lower() or "quant" in repo_id.lower(),
     }
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        import json
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}

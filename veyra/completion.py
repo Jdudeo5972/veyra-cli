@@ -37,7 +37,14 @@ MODEL = {
     "remove": "Remove model from registry",
 }
 
-MODE = {"base": "Raw completion mode", "chatml": "ChatML conversation mode"}
+MODE = {
+    "base": "Raw completion mode",
+    "chatml": "ChatML conversation mode",
+    "qwen": "Qwen ChatML-style mode",
+    "gemma": "Gemma start_of_turn mode",
+    "mistral": "Mistral [INST] mode",
+    "llama3": "Llama 3 header mode",
+}
 AUTOLOAD = {"on": "Autoload current model", "off": "Start shell without loading model"}
 THEME = {
     "list": "List themes",

@@ -55,6 +55,7 @@ class OnnxCausalLMRunner:
         self.generation_config = self._read_json("generation_config.json")
         self.tokenizer = Tokenizer.from_file(str(self.tokenizer_path))
         self.eos_ids = self._eos_ids()
+        self.embed_session = None
 
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = max(1, int(threads or 2))
@@ -74,8 +75,15 @@ class OnnxCausalLMRunner:
         self.input_by_name = {i.name: i for i in self.inputs}
         self.output_names = [o.name for o in self.outputs]
         self.past_inputs = self._past_inputs()
+        self.state_inputs = self._state_inputs()
         self.uses_cache = bool(self.past_inputs)
-        unsupported = [i.name for i in self.inputs if i.name not in SUPPORTED_INPUTS and not is_past_input(i.name)]
+        if "inputs_embeds" in self.input_by_name:
+            self.embed_session = self._load_embed_session(ort)
+        unsupported = [
+            i.name
+            for i in self.inputs
+            if i.name not in SUPPORTED_INPUTS and not is_past_input(i.name) and not _is_state_input(i.name)
+        ]
         if unsupported:
             raise UnsupportedModelError(unsupported)
         if self.uses_cache:
@@ -100,6 +108,7 @@ class OnnxCausalLMRunner:
         generated: list[int] = []
         previous_text = self.tokenizer.decode(ids, skip_special_tokens=False)
         cache = self._empty_cache() if self.uses_cache else {}
+        state_cache = self._empty_state_cache()
 
         for _ in range(max(0, int(max_new_tokens))):
             if self.uses_cache and generated:
@@ -110,10 +119,11 @@ class OnnxCausalLMRunner:
                 input_ids = np.asarray([ids], dtype=np.int64) if self.uses_cache else np.asarray([ids + generated], dtype=np.int64)
                 total_len = input_ids.shape[1]
                 position_start = 0
-            feed = self._feed(input_ids, total_len=total_len, position_start=position_start, cache=cache)
+            feed = self._feed(input_ids, total_len=total_len, position_start=position_start, cache=cache, state_cache=state_cache)
             result = self.session.run(None, feed)
             if self.uses_cache:
                 cache = self._update_cache(result)
+            state_cache = self._update_state_cache(result)
             logits = np.asarray(result[0])[0, -1, :].astype(np.float64)
             next_id = sample_next_token(
                 logits,
@@ -141,6 +151,7 @@ class OnnxCausalLMRunner:
         total_len: int,
         position_start: int,
         cache: dict[tuple[int, str], np.ndarray] | None = None,
+        state_cache: dict[str, np.ndarray] | None = None,
     ) -> dict[str, np.ndarray]:
         step_len = input_ids.shape[1]
         feed: dict[str, np.ndarray] = {}
@@ -148,14 +159,24 @@ class OnnxCausalLMRunner:
             name = input_info.name
             if name == "input_ids":
                 feed[name] = input_ids
+            elif name == "inputs_embeds":
+                feed[name] = self._embed(input_ids)
             elif name == "attention_mask":
                 feed[name] = np.ones((1, total_len), dtype=np.int64)
             elif name == "position_ids":
-                feed[name] = np.arange(position_start, position_start + step_len, dtype=np.int64)[None, :]
+                base = np.arange(position_start, position_start + step_len, dtype=np.int64)
+                if _rank(input_info) == 3:
+                    feed[name] = np.stack([base, base, base])[:, None, :]
+                else:
+                    feed[name] = base[None, :]
+            elif name == "num_logits_to_keep":
+                feed[name] = np.asarray(1, dtype=np.int64)
             elif cache is not None and is_past_input(name):
                 parsed = parse_cache_name(name)
                 if parsed is not None:
                     feed[name] = cache[parsed]
+            elif state_cache is not None and name in state_cache:
+                feed[name] = state_cache[name]
         return feed
 
     def _past_inputs(self) -> dict[tuple[int, str], Any]:
@@ -166,6 +187,9 @@ class OnnxCausalLMRunner:
                 parsed[item] = input_info
         return parsed
 
+    def _state_inputs(self) -> dict[str, Any]:
+        return {input_info.name: input_info for input_info in self.inputs if _is_state_input(input_info.name)}
+
     def _cache_meta(self) -> dict[str, Any]:
         missing = missing_cache_fields(self.config)
         if missing:
@@ -175,16 +199,16 @@ class OnnxCausalLMRunner:
                 + ". Required fields are num_hidden_layers, num_key_value_heads, and head_dim."
             )
         return {
-            "num_hidden_layers": int(self.config["num_hidden_layers"]),
-            "num_key_value_heads": int(self.config["num_key_value_heads"]),
-            "head_dim": int(self.config["head_dim"]),
-            "dtype": _numpy_dtype(self.config.get("dtype")),
+            "num_hidden_layers": int(_config_value(self.config, "num_hidden_layers")),
+            "num_key_value_heads": int(_config_value(self.config, "num_key_value_heads")),
+            "head_dim": int(_config_value(self.config, "head_dim")),
+            "dtype": _numpy_dtype(_config_value(self.config, "dtype")),
         }
 
     def _empty_cache(self) -> dict[tuple[int, str], np.ndarray]:
-        layers = int(self.cache_meta["num_hidden_layers"])
         cache: dict[tuple[int, str], np.ndarray] = {}
-        for layer in range(layers):
+        layers = sorted({layer for layer, _ in self.past_inputs})
+        for layer in layers:
             for kind in ("key", "value"):
                 input_info = self.past_inputs.get((layer, kind))
                 if input_info is None:
@@ -224,8 +248,8 @@ class OnnxCausalLMRunner:
                 + shapes
             )
         missing: list[str] = []
-        layers = int(self.cache_meta["num_hidden_layers"])
-        for layer in range(layers):
+        layers = sorted({layer for layer, _ in self.past_inputs})
+        for layer in layers:
             for kind in ("key", "value"):
                 if (layer, kind) not in indices:
                     missing.append(f"{layer}.{kind}")
@@ -235,6 +259,38 @@ class OnnxCausalLMRunner:
 
     def _update_cache(self, result: list[np.ndarray]) -> dict[tuple[int, str], np.ndarray]:
         return {key: np.asarray(result[idx]) for key, idx in self.present_output_indices.items()}
+
+    def _empty_state_cache(self) -> dict[str, np.ndarray]:
+        cache: dict[str, np.ndarray] = {}
+        for name, input_info in self.state_inputs.items():
+            shape = [int(dim) if isinstance(dim, int) and dim > 0 else 1 for dim in getattr(input_info, "shape", [])]
+            cache[name] = np.zeros(shape, dtype=_numpy_dtype(_config_value(self.config, "mamba_ssm_dtype") or _config_value(self.config, "dtype")))
+        return cache
+
+    def _update_state_cache(self, result: list[np.ndarray]) -> dict[str, np.ndarray]:
+        if not self.state_inputs:
+            return {}
+        output_map = {name: idx for idx, name in enumerate(self.output_names)}
+        updated: dict[str, np.ndarray] = {}
+        for input_name in self.state_inputs:
+            present_name = input_name.replace("past_", "present_", 1)
+            if present_name in output_map:
+                updated[input_name] = np.asarray(result[output_map[present_name]])
+            else:
+                updated[input_name] = np.zeros_like(self._empty_state_cache()[input_name])
+        return updated
+
+    def _load_embed_session(self, ort):
+        candidates = [self.model_dir / "embed_tokens.onnx", self.model_dir / "onnx" / "embed_tokens.onnx"]
+        for path in candidates:
+            if path.exists():
+                return ort.InferenceSession(str(path), providers=[provider_for_device(self.device)])
+        raise RuntimeError("Model expects inputs_embeds, but embed_tokens.onnx was not found.")
+
+    def _embed(self, input_ids: np.ndarray) -> np.ndarray:
+        if self.embed_session is None:
+            raise RuntimeError("Model expects inputs_embeds, but no embedding ONNX session is loaded.")
+        return np.asarray(self.embed_session.run(None, {"input_ids": input_ids})[0])
 
     def _read_json(self, name: str) -> dict:
         path = self.model_dir / name
@@ -322,6 +378,28 @@ def _numpy_dtype(name: Any) -> np.dtype:
     if str(name).lower() in {"bfloat16", "bf16"}:
         return np.dtype(np.float32)
     return np.dtype(np.float32)
+
+
+def _config_value(config: dict[str, Any], field: str) -> Any:
+    if field in config:
+        return config[field]
+    text_config = config.get("text_config")
+    if isinstance(text_config, dict) and field in text_config:
+        return text_config[field]
+    if field == "head_dim":
+        hidden = _config_value(config, "hidden_size")
+        heads = _config_value(config, "num_attention_heads")
+        if isinstance(hidden, int) and isinstance(heads, int) and heads:
+            return hidden // heads
+    return None
+
+
+def _is_state_input(name: str) -> bool:
+    return name.startswith("past_conv.") or name.startswith("past_recurrent.")
+
+
+def _rank(input_info: Any) -> int:
+    return len(getattr(input_info, "shape", []) or [])
 
 
 def normalize_device(name: str | None) -> str:

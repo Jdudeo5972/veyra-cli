@@ -6,6 +6,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from .prompts import normalize_mode
+
 
 APP_NAME = "veyra"
 
@@ -78,6 +80,7 @@ def load_config() -> dict[str, Any]:
         config["theme"] = "veyra"
     if config.get("device") not in {"cpu", "cuda", "directml", "coreml", "openvino", "rocm", "tensorrt"}:
         config["device"] = "cpu"
+    config["current_mode"] = normalize_mode(config.get("current_mode"))
     if not isinstance(config.get("stats"), bool):
         config["stats"] = False
     if (
@@ -122,7 +125,7 @@ def register_model(config: dict[str, Any], name: str, entry: dict[str, Any], sel
     if select:
         config["current_model"] = name
         if entry.get("mode"):
-            config["current_mode"] = entry["mode"]
+            config["current_mode"] = normalize_mode(entry["mode"])
     save_config(config)
 
 
