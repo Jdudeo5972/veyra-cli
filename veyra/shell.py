@@ -110,25 +110,54 @@ class VeyraShell:
         return input("You \u203a ")
 
     def banner(self, state: str) -> None:
-        width = 58
+        left_width = 29
+        right_width = 42
         title = f" {self.assistant_name()} v{__version__} "
         border_role = "border"
         top = (
             self.theme.text(border_role, "\u256d\u2500")
             + self.theme.text("title", title)
-            + self.theme.text(border_role, "\u2500" * (width - len(title) - 2) + "\u256e")
+            + self.theme.text(border_role, "\u2500" * max(0, left_width - len(title) - 1))
+            + self.theme.text(border_role, "\u252c")
+            + self.theme.text(border_role, "\u2500" * right_width)
+            + self.theme.text(border_role, "\u256e")
         )
         print(top)
-        for segments in self.banner_segments(state):
-            self.print_box_line(segments, width)
-        print(self.theme.text(border_role, "\u2570" + "\u2500" * (width - 2) + "\u256f"))
+        for left, right in self.banner_rows(state):
+            self.print_box_row(left, right, left_width, right_width)
+        print(
+            self.theme.text(border_role, "\u2570")
+            + self.theme.text(border_role, "\u2500" * left_width)
+            + self.theme.text(border_role, "\u2534")
+            + self.theme.text(border_role, "\u2500" * right_width)
+            + self.theme.text(border_role, "\u256f")
+        )
 
-    def print_box_line(self, segments: list[tuple[str, str]], width: int) -> None:
-        plain = "".join(text for _, text in segments)
-        body = "".join(self.theme.text(role, text) for role, text in segments)
-        body += " " * max(0, width - 4 - len(plain))
+    def print_box_row(
+        self,
+        left_segments: list[tuple[str, str]],
+        right_segments: list[tuple[str, str]],
+        left_width: int,
+        right_width: int,
+    ) -> None:
         border = self.theme.text("border", "\u2502")
-        print(f"{border} {body} {border}")
+        left = self.pad_segments(left_segments, left_width)
+        right = self.pad_segments(right_segments, right_width)
+        print(f"{border}{left}{border}{right}{border}")
+
+    def pad_segments(self, segments: list[tuple[str, str]], width: int) -> str:
+        used = 0
+        clipped: list[tuple[str, str]] = []
+        for role, text in segments:
+            remaining = width - used
+            if remaining <= 0:
+                break
+            piece = text[:remaining]
+            clipped.append((role, piece))
+            used += len(piece)
+        plain = "".join(text for _, text in clipped)
+        body = "".join(self.theme.text(role, text) for role, text in clipped)
+        return body + " " * max(0, width - len(plain))
 
     def ready_message(self) -> None:
         if not models(self.config):
@@ -139,6 +168,9 @@ class VeyraShell:
         self.command_hint("type", ["/help", "/model", "/mode", "/device", "/chat", "/exit"], "")
 
     def banner_segments(self, state: str) -> list[list[tuple[str, str]]]:
+        return [left + right for left, right in self.banner_rows(state)]
+
+    def banner_rows(self, state: str) -> list[tuple[list[tuple[str, str]], list[tuple[str, str]]]]:
         defaults = self.config.get("defaults", {})
         autoload = "on" if self.config.get("autoload", True) else "off"
         status_role = {
@@ -148,19 +180,16 @@ class VeyraShell:
             "no model": "status_empty",
             "unloaded": "status_empty",
         }.get(state, "status_empty")
+        model = self.config.get("current_model") or "none"
+        mode = self.config.get("current_mode", "chatml")
         return [
-            [(status_role, "\u25cf " + state), ("muted", f" autoload:{autoload}")],
-            [("label", "model  "), ("value", self.config.get("current_model") or "none")],
-            [("label", "mode   "), ("value", self.config.get("current_mode", "chatml"))],
-            [
-                ("label", "gen    "),
-                (
-                    "value",
-                    f"tokens:{defaults.get('max_new_tokens', 128)}  temp:{defaults.get('temperature', 0.8)}  "
-                    f"top-k:{defaults.get('top_k', 40)}  top-p:{defaults.get('top_p', 1.0)}",
-                ),
-            ],
-            [("label", "       "), ("value", f"repeat:{defaults.get('repetition_penalty', 1.0)}")],
+            [[], [("label", "  Tips for getting started")]],
+            [[("muted", "    "), (status_role, "\u25cf " + state)], [("label", "  Model: "), ("value", model)]],
+            [[("muted", f"    autoload: {autoload}")], [("label", "  Mode:  "), ("value", mode)]],
+            [[], []],
+            [[("muted", "    Using local ONNX engine")], [("label", "  Generation Settings")]],
+            [[("muted", "    Type /help for commands")], [("value", f"  tokens: {defaults.get('max_new_tokens', 128)}   temp: {defaults.get('temperature', 0.8)}   top-k: {defaults.get('top_k', 40)}")]],
+            [[], [("value", f"  repeat: {defaults.get('repetition_penalty', 1.0)}   top-p: {defaults.get('top_p', 1.0)}")]],
         ]
 
     def chat_names(self) -> list[str]:
