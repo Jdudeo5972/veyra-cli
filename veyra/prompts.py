@@ -43,17 +43,17 @@ def format_qwen(user_text: str, history: list[dict[str, str]], system_prompt: st
 
 
 def format_gemma(user_text: str, history: list[dict[str, str]], system_prompt: str | None = None) -> str:
-    parts: list[str] = []
-    pending_system = system_prompt.strip() + "\n\n" if system_prompt else ""
+    parts: list[str] = ["<bos>"]
+    pending_system = system_prompt.strip() + "\n" if system_prompt else ""
     for message in history:
         role = message.get("role")
         if role == "user":
-            content = pending_system + message.get("content", "")
+            content = (pending_system + message.get("content", "")).strip()
             pending_system = ""
             parts.append(f"<start_of_turn>user\n{content}<end_of_turn>\n")
         elif role == "assistant":
-            parts.append(f"<start_of_turn>model\n{message.get('content', '')}<end_of_turn>\n")
-    parts.append(f"<start_of_turn>user\n{pending_system}{user_text}<end_of_turn>\n<start_of_turn>model\n")
+            parts.append(f"<start_of_turn>model\n{message.get('content', '').strip()}<end_of_turn>\n")
+    parts.append(f"<start_of_turn>user\n{(pending_system + user_text).strip()}<end_of_turn>\n<start_of_turn>model\n")
     return "".join(parts)
 
 
