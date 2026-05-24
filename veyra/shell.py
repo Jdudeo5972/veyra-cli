@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -191,8 +192,14 @@ class VeyraShell:
             self.chat.message("user", text)
         print(self.theme.text("assistant_prompt", "Veyra \u203a "), end="", flush=True)
         chunks: list[str] = []
+        start = time.perf_counter()
+        first_token_at: float | None = None
+        generated_tokens = 0
         try:
             for delta in self.runner.generate(prompt, **defaults):
+                if first_token_at is None:
+                    first_token_at = time.perf_counter()
+                generated_tokens += 1
                 chunks.append(delta)
                 print(delta, end="", flush=True)
         except KeyboardInterrupt:
@@ -203,6 +210,8 @@ class VeyraShell:
             self.error(f"\nGeneration failed: {exc}")
         finally:
             print("")
+            if self.config.get("stats", False):
+                self.print_generation_stats(start, first_token_at, generated_tokens)
             if chunks and self.chat:
                 self.chat.message("assistant", "".join(chunks))
 
@@ -226,6 +235,8 @@ class VeyraShell:
             self.theme_command(args)
         elif cmd == "/device":
             self.device_command(args)
+        elif cmd == "/stats":
+            self.stats_command(args)
         elif cmd == "/autoload":
             self.autoload_command(args)
         elif cmd in {"/temp", "/tokens", "/topk", "/topp", "/repetition"}:
@@ -247,6 +258,7 @@ class VeyraShell:
             ("/mode", "[base|chatml]"),
             ("/theme", "[list|veyra|warm|green|blue|mono]"),
             ("/device", "[list|cpu|cuda|directml|coreml|openvino|rocm|tensorrt]"),
+            ("/stats", "[on|off]"),
             ("/autoload", "[on|off]"),
             ("/temp", "VALUE  /tokens N  /topk N  /topp VALUE  /repetition VALUE"),
             ("/system", "TEXT  /update"),
@@ -265,6 +277,7 @@ class VeyraShell:
         if show_chat:
             print(self.theme.text("label", "chat   ") + self.theme.text("value", str(self.chat.path if self.chat else "none")))
             print(self.theme.text("label", "device ") + self.theme.text("value", normalize_device(self.config.get("device"))))
+            print(self.theme.text("label", "stats  ") + self.theme.text("value", "on" if self.config.get("stats", False) else "off"))
 
     def theme_command(self, args: list[str]) -> None:
         if not args:
@@ -324,6 +337,17 @@ class VeyraShell:
         if models(self.config) and self.config.get("current_model"):
             self.load_current_model()
         self.success(f"device: {selected} ({provider_for_device(selected)})")
+
+    def stats_command(self, args: list[str]) -> None:
+        if not args:
+            print(self.theme.text("label", "stats  ") + self.theme.text("value", "on" if self.config.get("stats", False) else "off"))
+            return
+        if args[0] not in {"on", "off"}:
+            self.warn("Usage: /stats [on|off]")
+            return
+        self.config["stats"] = args[0] == "on"
+        save_config(self.config)
+        self.success(f"stats: {args[0]}")
 
     def model_command(self, args: list[str]) -> None:
         if not args:
@@ -523,6 +547,14 @@ class VeyraShell:
 
     def error(self, message: str) -> None:
         print(self.theme.text("error", message))
+
+    def print_generation_stats(self, start: float, first_token_at: float | None, generated_tokens: int) -> None:
+        end = time.perf_counter()
+        elapsed = max(0.0, end - start)
+        ttft = 0.0 if first_token_at is None else max(0.0, first_token_at - start)
+        speed = generated_tokens / elapsed if elapsed > 0 and generated_tokens else 0.0
+        text = f"stats: {generated_tokens} tokens | {speed:.2f} tok/s | first token {ttft:.2f}s"
+        print(self.theme.text("muted", text))
 
     def clear_visible_screen(self, force: bool = False) -> None:
         if sys.stdout.isatty() and os.environ.get("TERM") != "dumb":

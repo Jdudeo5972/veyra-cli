@@ -10,6 +10,7 @@ TOP = {
     "/chat": "Manage saved chats",
     "/theme": "Change CLI color theme",
     "/device": "Select ONNX Runtime device",
+    "/stats": "Toggle response stats",
     "/autoload": "Toggle model autoload on startup",
     "/temp": "Set or show sampling temperature",
     "/tokens": "Set or show max new tokens",
@@ -56,6 +57,7 @@ DEVICE = {
     "rocm": "AMD ROCm provider",
     "tensorrt": "NVIDIA TensorRT provider",
 }
+STATS = {"on": "Show response stats", "off": "Hide response stats"}
 CHAT = {
     "new": "Start a new chat",
     "list": "List saved chats",
@@ -107,6 +109,8 @@ class VeyraCompleter(Completer):
             yield from _dict_completions(THEME, current, start)
         elif command == "/device" and len(parts) == 2:
             yield from _dict_completions(DEVICE, current, start)
+        elif command == "/stats" and len(parts) == 2:
+            yield from _dict_completions(STATS, current, start)
         elif command == "/chat" and len(parts) == 2:
             yield from _dict_completions(CHAT, current, start)
         elif command == "/chat" and len(parts) == 3 and parts[1] in {"load", "rename"}:
