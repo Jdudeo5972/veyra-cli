@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from .hf import download_model, list_veyra_models, registry_entry
 from .inspect import format_inspection, inspect_model
 from .prompts import format_prompt, infer_prompt_mode
 from .registry import load_config, register_model, safe_model_name
 from .runner import OnnxCausalLMRunner
-from .shell import VeyraShell, update_message
+from .shell import VeyraShell, find_model_dirs, make_local_entry, update_message
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -105,23 +106,27 @@ def add_cmd(argv: list[str]) -> int:
     parser.add_argument("path")
     parser.add_argument("--name")
     args = parser.parse_args(argv)
+    root = Path(args.path).expanduser()
+    scanned = find_model_dirs(root)
+    if len(scanned) > 1 or (scanned and scanned[0] != root.resolve()):
+        config = load_config()
+        for candidate in scanned:
+            try:
+                info = inspect_model(candidate)
+                if info.supported:
+                    name = safe_model_name(info.model_dir.name)
+                    register_model(config, name, make_local_entry(info))
+                    print(f"Added {name}.")
+            except Exception as exc:
+                print(f"Skipping {candidate}: {exc}")
+        return 0
     info = inspect_model(args.path)
     if not info.supported:
         print(format_inspection(info))
         return 1
     config = load_config()
     name = args.name or safe_model_name(info.model_dir.name)
-    entry = {
-        "source": "local",
-        "repo_id": None,
-        "revision": None,
-        "downloaded_commit": None,
-        "path": str(info.model_dir),
-        "runtime": "onnx",
-        "architecture": info.model_type or info.architecture or "unknown",
-        "mode": infer_prompt_mode(_read_json(info.model_dir / "config.json"), _read_json(info.model_dir / "tokenizer_config.json")),
-        "quantized": "int8" in info.onnx_path.name.lower(),
-    }
+    entry = make_local_entry(info)
     register_model(config, name, entry)
     print(f"Added and selected {name}.")
     return 0

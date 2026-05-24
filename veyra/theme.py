@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 
 
-THEMES = ("veyra", "warm", "green", "blue", "mono")
+THEMES = ("veyra", "warm", "red", "pink", "lime", "green", "blue", "cyan", "purple", "orange", "gray", "rainbow", "mono")
 THEME_ALIASES = {"neon": "blue"}
 RESET = "\033[0m"
 
@@ -24,6 +24,10 @@ ANSI = {
     "bright_cyan": "\033[96m",
     "white": "\033[97m",
     "veyra_pink": "\033[38;2;224;57;113m",
+    "warm_orange": "\033[38;2;206;86;47m",
+    "lime": "\033[92m",
+    "gray": "\033[90m",
+    "orange": "\033[38;2;255;140;0m",
 }
 
 
@@ -46,22 +50,25 @@ ROLE_COLORS = {
         "error": "red",
     },
     "warm": {
-        "title": "yellow",
-        "border": "yellow",
-        "status_ready": "green",
+        "title": "warm_orange",
+        "border": "warm_orange",
+        "status_ready": "white",
         "status_loading": "yellow",
         "status_error": "red",
         "status_empty": "dim",
-        "label": "yellow",
+        "label": "warm_orange",
         "value": "",
         "muted": "dim",
-        "command": "yellow",
+        "command": "warm_orange",
         "user_prompt": "white",
-        "assistant_prompt": "yellow",
-        "success": "green",
+        "assistant_prompt": "warm_orange",
+        "success": "white",
         "warning": "yellow",
         "error": "red",
     },
+    "red": {},
+    "pink": {},
+    "lime": {},
     "green": {
         "title": "green",
         "border": "green",
@@ -82,7 +89,7 @@ ROLE_COLORS = {
     "blue": {
         "title": "bright_cyan",
         "border": "cyan",
-        "status_ready": "green",
+        "status_ready": "white",
         "status_loading": "yellow",
         "status_error": "red",
         "status_empty": "dim",
@@ -92,12 +99,60 @@ ROLE_COLORS = {
         "command": "cyan",
         "user_prompt": "white",
         "assistant_prompt": "cyan",
-        "success": "green",
+        "success": "white",
+        "warning": "yellow",
+        "error": "red",
+    },
+    "cyan": {},
+    "purple": {},
+    "orange": {},
+    "gray": {},
+    "rainbow": {
+        "title": "bright_magenta",
+        "border": "bright_cyan",
+        "status_ready": "white",
+        "status_loading": "yellow",
+        "status_error": "red",
+        "status_empty": "dim",
+        "label": "bright_yellow",
+        "value": "",
+        "muted": "dim",
+        "command": "bright_magenta",
+        "user_prompt": "white",
+        "assistant_prompt": "bright_cyan",
+        "success": "white",
         "warning": "yellow",
         "error": "red",
     },
     "mono": {},
 }
+
+for _theme, _color in {
+    "red": "bright_red",
+    "pink": "veyra_pink",
+    "lime": "lime",
+    "cyan": "bright_cyan",
+    "purple": "bright_magenta",
+    "orange": "orange",
+    "gray": "gray",
+}.items():
+    ROLE_COLORS[_theme] = {
+        "title": _color,
+        "border": _color,
+        "status_ready": "white" if _theme != "lime" else "lime",
+        "status_loading": "yellow",
+        "status_error": "red",
+        "status_empty": "dim",
+        "label": _color,
+        "value": "",
+        "muted": "dim",
+        "command": _color,
+        "user_prompt": "white",
+        "assistant_prompt": _color,
+        "success": "white" if _theme != "lime" else "lime",
+        "warning": "yellow",
+        "error": "red",
+    }
 
 
 PT_COLORS = {
@@ -115,6 +170,10 @@ PT_COLORS = {
     "bright_cyan": "ansibrightcyan",
     "white": "ansiwhite",
     "veyra_pink": "#e03971",
+    "warm_orange": "#CE562F",
+    "lime": "ansibrightgreen",
+    "gray": "ansibrightblack",
+    "orange": "#ff8c00",
 }
 
 

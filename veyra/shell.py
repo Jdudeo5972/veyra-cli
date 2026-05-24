@@ -32,6 +32,7 @@ class VeyraShell:
         self.runner: OnnxCausalLMRunner | None = None
         self.load_error: str | None = None
         self.system_prompt: str | None = None
+        self._last_tab_at = 0.0
         self.chat = ChatStore.latest() if args.continue_chat else None
         if self.chat is None:
             self.chat = ChatStore.new(self.config.get("current_model"), self.config.get("current_mode", "chatml"))
@@ -110,7 +111,7 @@ class VeyraShell:
 
     def banner(self, state: str) -> None:
         width = 58
-        title = f" Veyra v{__version__} "
+        title = f" {self.assistant_name()} v{__version__} "
         border_role = "border"
         top = (
             self.theme.text(border_role, "\u256d\u2500")
@@ -171,6 +172,7 @@ class VeyraShell:
             return False
         try:
             self.runner = OnnxCausalLMRunner(entry["path"], device=self.config.get("device", "cpu"))
+            self.apply_model_profile(entry)
             self.load_error = None
             return True
         except Exception as exc:
@@ -191,13 +193,16 @@ class VeyraShell:
         defaults = self.config.get("defaults", {})
         if self.chat:
             self.chat.message("user", text)
-        print(self.theme.text("assistant_prompt", "Veyra \u203a "), end="", flush=True)
+        print(self.theme.text("assistant_prompt", f"{self.assistant_name()} \u203a "), end="", flush=True)
         chunks: list[str] = []
         start = time.perf_counter()
         first_token_at: float | None = None
         generated_tokens = 0
         try:
             for delta in self.runner.generate(prompt, **defaults):
+                if self.double_tab_stop_requested():
+                    self.warn("\n[generation stopped]")
+                    break
                 if first_token_at is None:
                     first_token_at = time.perf_counter()
                 generated_tokens += 1
@@ -234,6 +239,8 @@ class VeyraShell:
             self.mode_command(args)
         elif cmd == "/theme":
             self.theme_command(args)
+        elif cmd == "/profile":
+            self.profile_command(args)
         elif cmd == "/device":
             self.device_command(args)
         elif cmd == "/stats":
@@ -255,9 +262,10 @@ class VeyraShell:
 
     def help(self) -> None:
         rows = [
-            ("/model", "[list|use|fetch|refresh|update|add|inspect|remove]"),
+            ("/model", "[list|use|fetch|refresh|update|test|add|inspect|remove]"),
             ("/mode", "[base|chatml|qwen|gemma|mistral|llama3]"),
-            ("/theme", "[list|veyra|warm|green|blue|mono]"),
+            ("/theme", "[list|veyra|warm|red|pink|lime|green|blue|cyan|purple|orange|gray|rainbow|mono]"),
+            ("/profile", "[show|name NAME|mode MODE]"),
             ("/device", "[list|cpu|cuda|directml|coreml|openvino|rocm|tensorrt]"),
             ("/stats", "[on|off]"),
             ("/autoload", "[on|off]"),
@@ -285,6 +293,11 @@ class VeyraShell:
             print(self.theme.text("label", "theme  ") + self.theme.text("value", normalize_theme(self.config.get("theme"))))
             print(self.theme.text("muted", "available: ") + " ".join(self.theme.text("command", name) for name in THEMES))
             return
+        if args[0] == "help":
+            target = normalize_device(args[1] if len(args) > 1 else current)
+            print(self.theme.text("label", target + " ") + self.theme.text("value", provider_for_device(target)))
+            self.warn(device_install_hint(target))
+            return
         if args[0] == "list":
             print(" ".join(self.theme.text("command", name) for name in THEMES))
             return
@@ -299,6 +312,36 @@ class VeyraShell:
         self.clear_visible_screen()
         self.status(show_chat=False)
         self.success(f"theme: {selected}")
+
+    def profile_command(self, args: list[str]) -> None:
+        if not args or args[0] == "show":
+            self.profile_show()
+            return
+        if args[0] == "name" and len(args) >= 2:
+            name = " ".join(args[1:]).strip()
+            self.config["assistant_name"] = name
+            entry = self.current_entry()
+            if entry is not None:
+                entry.setdefault("profile", {})["assistant_name"] = name
+            save_config(self.config)
+            self.success(f"name: {name}")
+            return
+        if args[0] == "mode" and len(args) >= 2:
+            mode = normalize_mode(args[1])
+            self.config["current_mode"] = mode
+            entry = self.current_entry()
+            if entry is not None:
+                entry["mode"] = mode
+                entry.setdefault("profile", {})["mode"] = mode
+            save_config(self.config)
+            self.success(f"profile mode: {mode}")
+            return
+        self.warn("Usage: /profile [show|name NAME|mode MODE]")
+
+    def profile_show(self) -> None:
+        print(self.theme.text("label", "name   ") + self.theme.text("value", self.assistant_name()))
+        print(self.theme.text("label", "model  ") + self.theme.text("value", self.config.get("current_model") or "none"))
+        print(self.theme.text("label", "mode   ") + self.theme.text("value", self.config.get("current_mode", "chatml")))
 
     def device_command(self, args: list[str]) -> None:
         current = normalize_device(self.config.get("device"))
@@ -320,6 +363,11 @@ class VeyraShell:
                     + " "
                     + self.theme.text("muted", provider)
                 )
+            return
+        if args[0] == "help":
+            target = normalize_device(args[1] if len(args) > 1 else current)
+            print(self.theme.text("label", target + " ") + self.theme.text("value", provider_for_device(target)))
+            self.warn(device_install_hint(target))
             return
         selected = normalize_device(args[0])
         if selected != args[0].lower() and args[0].lower() not in {"gpu", "dml"}:
@@ -366,6 +414,8 @@ class VeyraShell:
             self.remote_list()
         elif action == "update":
             self.update_models(all_models=len(args) >= 2 and args[1] == "all")
+        elif action == "test":
+            self.model_test(args[1] if len(args) >= 2 else None)
         elif action == "add" and len(args) >= 2:
             self.add_model(args[1], None)
         elif action == "inspect":
@@ -374,7 +424,7 @@ class VeyraShell:
             remove_model(self.config, args[1])
             self.success(f"Removed {args[1]}.")
         else:
-            self.warn("Usage: /model [list|use NAME|fetch|refresh|update [all]|add PATH|inspect|remove NAME]")
+            self.warn("Usage: /model [list|use NAME|fetch|refresh|update [all]|test [NAME]|add PATH|inspect|remove NAME]")
 
     def list_models(self) -> None:
         if not models(self.config):
@@ -393,6 +443,7 @@ class VeyraShell:
         entry = models(self.config)[name]
         if entry.get("mode"):
             self.config["current_mode"] = entry["mode"]
+        self.apply_model_profile(entry)
         save_config(self.config)
         self.runner = None
         if self.load_current_model():
@@ -446,29 +497,57 @@ class VeyraShell:
         save_config(self.config)
 
     def add_model(self, path: str, name: str | None) -> None:
+        added = False
+        for candidate in find_model_dirs(Path(path).expanduser()):
+            try:
+                info = inspect_model(candidate)
+                if not info.supported:
+                    continue
+                model_name = name or safe_model_name(info.model_dir.name)
+                if name and added:
+                    model_name = safe_model_name(info.model_dir.name)
+                entry = make_local_entry(info)
+                register_model(self.config, model_name, entry)
+                added = True
+                self.success(f"Added {model_name}.")
+            except Exception as exc:
+                self.warn(f"Skipping {candidate}: {exc}")
+        if added:
+            self.runner = None
+            self.load_current_model()
+            return
         try:
             info = inspect_model(path)
             if not info.supported:
                 print(format_inspection(info))
                 return
             model_name = name or safe_model_name(Path(path).expanduser().resolve().name)
-            entry = {
-                "source": "local",
-                "repo_id": None,
-                "revision": None,
-                "downloaded_commit": None,
-                "path": str(info.model_dir),
-                "runtime": "onnx",
-                "architecture": info.model_type or info.architecture or "unknown",
-                "mode": infer_prompt_mode(info_config(info.model_dir), info_config(info.model_dir, "tokenizer_config.json")),
-                "quantized": "int8" in info.onnx_path.name.lower(),
-            }
+            entry = make_local_entry(info)
             register_model(self.config, model_name, entry)
             self.runner = None
             self.load_current_model()
             self.success(f"Added and selected {model_name}.")
         except Exception as exc:
             self.error(f"Could not add model: {exc}")
+
+    def model_test(self, name: str | None = None) -> None:
+        target = name or self.config.get("current_model")
+        entry = models(self.config).get(target)
+        if not entry:
+            self.error(f"Unknown model: {target}")
+            return
+        start = time.perf_counter()
+        try:
+            runner = OnnxCausalLMRunner(entry["path"], device=self.config.get("device", "cpu"))
+            load_s = time.perf_counter() - start
+            prompt = format_prompt("Say hi", entry.get("mode", self.config.get("current_mode", "chatml")))
+            gen_start = time.perf_counter()
+            first = next(runner.generate(prompt, max_new_tokens=1, temperature=0), "")
+            total = time.perf_counter() - start
+            self.success(f"test ok: {target}")
+            print(self.theme.text("muted", f"load {load_s:.2f}s | first token {time.perf_counter() - gen_start:.2f}s | total {total:.2f}s | token {first!r}"))
+        except Exception as exc:
+            self.error(f"test failed: {exc}")
 
     def inspect_current(self) -> None:
         _, entry = current_model_entry(self.config)
@@ -486,6 +565,10 @@ class VeyraShell:
             self.warn("Usage: /mode [base|chatml|qwen|gemma|mistral|llama3]")
             return
         self.config["current_mode"] = mode
+        entry = self.current_entry()
+        if entry is not None:
+            entry["mode"] = mode
+            entry.setdefault("profile", {})["mode"] = mode
         save_config(self.config)
         if self.chat:
             self.chat.append({"type": "event", "name": "mode_changed", "value": mode})
@@ -559,6 +642,37 @@ class VeyraShell:
         text = f"stats: {generated_tokens} tokens | {speed:.2f} tok/s | first token {ttft:.2f}s | total {elapsed:.2f}s | device {device}"
         print(self.theme.text("muted", text))
 
+    def assistant_name(self) -> str:
+        return str(self.config.get("assistant_name") or "Veyra")
+
+    def current_entry(self) -> dict | None:
+        name = self.config.get("current_model")
+        return models(self.config).get(name) if name else None
+
+    def apply_model_profile(self, entry: dict) -> None:
+        profile = entry.get("profile") if isinstance(entry.get("profile"), dict) else {}
+        if profile.get("assistant_name"):
+            self.config["assistant_name"] = profile["assistant_name"]
+        if profile.get("mode"):
+            self.config["current_mode"] = normalize_mode(profile["mode"])
+
+    def double_tab_stop_requested(self) -> bool:
+        if not sys.stdin.isatty():
+            return False
+        try:
+            import msvcrt
+            while msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch == "\t":
+                    now = time.perf_counter()
+                    if now - self._last_tab_at <= 0.6:
+                        self._last_tab_at = 0.0
+                        return True
+                    self._last_tab_at = now
+        except Exception:
+            return False
+        return False
+
     def clear_visible_screen(self, force: bool = False) -> None:
         if sys.stdout.isatty() and os.environ.get("TERM") != "dumb":
             print("\033[2J\033[H", end="")
@@ -589,3 +703,30 @@ def info_config(model_dir: Path, name: str = "config.json") -> dict:
             return json.load(f)
     except Exception:
         return {}
+
+
+def make_local_entry(info) -> dict:
+    mode = infer_prompt_mode(info_config(info.model_dir), info_config(info.model_dir, "tokenizer_config.json"))
+    return {
+        "source": "local",
+        "repo_id": None,
+        "revision": None,
+        "downloaded_commit": None,
+        "path": str(info.model_dir),
+        "runtime": "onnx",
+        "architecture": info.model_type or info.architecture or "unknown",
+        "mode": mode,
+        "profile": {"mode": mode, "assistant_name": "Veyra"},
+        "quantized": "int8" in info.onnx_path.name.lower() or "q4" in info.onnx_path.name.lower(),
+    }
+
+
+def find_model_dirs(root: Path) -> list[Path]:
+    root = root.resolve()
+    if not root.is_dir():
+        return []
+    candidates: list[Path] = []
+    for path in [root, *[p for p in root.iterdir() if p.is_dir()]]:
+        if (path / "tokenizer.json").exists() and (list(path.glob("*.onnx")) or list(path.rglob("*.onnx"))):
+            candidates.append(path)
+    return candidates

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .prompts import normalize_mode
+from .theme import THEMES
 
 
 APP_NAME = "veyra"
@@ -35,6 +36,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "theme": "veyra",
     "device": "cpu",
     "stats": False,
+    "assistant_name": "Veyra",
     "current_model": None,
     "current_mode": "chatml",
     "defaults": {
@@ -76,13 +78,15 @@ def load_config() -> dict[str, Any]:
     theme = config.get("theme")
     if theme == "neon":
         config["theme"] = "blue"
-    elif theme not in {"veyra", "warm", "green", "blue", "mono"}:
+    elif theme not in THEMES:
         config["theme"] = "veyra"
     if config.get("device") not in {"cpu", "cuda", "directml", "coreml", "openvino", "rocm", "tensorrt"}:
         config["device"] = "cpu"
     config["current_mode"] = normalize_mode(config.get("current_mode"))
     if not isinstance(config.get("stats"), bool):
         config["stats"] = False
+    if not config.get("assistant_name"):
+        config["assistant_name"] = "Veyra"
     if (
         loaded.get("theme") != config.get("theme")
         or loaded.get("device") != config.get("device")

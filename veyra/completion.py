@@ -9,6 +9,7 @@ TOP = {
     "/mode": "Show or change prompt mode",
     "/chat": "Manage saved chats",
     "/theme": "Change CLI color theme",
+    "/profile": "Model display profile",
     "/device": "Select ONNX Runtime device",
     "/stats": "Toggle response stats",
     "/autoload": "Toggle model autoload on startup",
@@ -32,6 +33,7 @@ MODEL = {
     "fetch": "Fetch ONNX models from veyra-ai",
     "refresh": "Refresh remote model list",
     "update": "Update installed model files",
+    "test": "Run a one-token model smoke test",
     "add": "Add local ONNX model",
     "inspect": "Inspect current model",
     "remove": "Remove model from registry",
@@ -50,12 +52,22 @@ THEME = {
     "list": "List themes",
     "veyra": "Pink and gray default theme",
     "warm": "Warm amber theme",
+    "red": "Red theme",
+    "pink": "Pink theme",
+    "lime": "Lime theme",
     "green": "Green terminal theme",
     "blue": "Blue and cyan theme",
+    "cyan": "Cyan theme",
+    "purple": "Purple theme",
+    "orange": "Orange theme",
+    "gray": "Gray theme",
+    "rainbow": "Rainbow theme",
     "mono": "No decorative colors",
 }
+PROFILE = {"show": "Show profile", "name": "Set assistant name", "mode": "Set model prompt mode"}
 DEVICE = {
     "list": "List available devices",
+    "help": "Show provider install hint",
     "cpu": "CPU execution provider",
     "cuda": "NVIDIA CUDA provider",
     "directml": "Windows DirectML provider",
@@ -108,12 +120,20 @@ class VeyraCompleter(Completer):
                         yield Completion(name, start_position=start)
             elif len(parts) == 3 and parts[1] == "update":
                 yield from _dict_completions(MODEL_UPDATE, current, start)
+            elif len(parts) == 3 and parts[1] == "test":
+                for name in self.model_names_cb():
+                    if name.startswith(current):
+                        yield Completion(name, start_position=start)
         elif command == "/mode" and len(parts) == 2:
             yield from _dict_completions(MODE, current, start)
         elif command == "/autoload" and len(parts) == 2:
             yield from _dict_completions(AUTOLOAD, current, start)
         elif command == "/theme" and len(parts) == 2:
             yield from _dict_completions(THEME, current, start)
+        elif command == "/profile" and len(parts) == 2:
+            yield from _dict_completions(PROFILE, current, start)
+        elif command == "/profile" and len(parts) == 3 and parts[1] == "mode":
+            yield from _dict_completions(MODE, current, start)
         elif command == "/device" and len(parts) == 2:
             yield from _dict_completions(DEVICE, current, start)
         elif command == "/stats" and len(parts) == 2:

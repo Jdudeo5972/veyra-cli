@@ -69,6 +69,7 @@ def registry_entry(repo_id: str, path: str | Path, revision: str = "main", commi
     model_type = info.model_type or (info.architecture or "unknown").lower()
     config = _read_json(Path(path) / "config.json")
     tokenizer_config = _read_json(Path(path) / "tokenizer_config.json")
+    mode = infer_prompt_mode(config, tokenizer_config)
     return {
         "source": "huggingface",
         "repo_id": repo_id,
@@ -77,7 +78,8 @@ def registry_entry(repo_id: str, path: str | Path, revision: str = "main", commi
         "path": str(Path(path).expanduser().resolve()),
         "runtime": "onnx",
         "architecture": model_type,
-        "mode": infer_prompt_mode(config, tokenizer_config),
+        "mode": mode,
+        "profile": {"mode": mode, "assistant_name": "Veyra"},
         "quantized": "int8" in repo_id.lower() or "quant" in repo_id.lower(),
     }
 

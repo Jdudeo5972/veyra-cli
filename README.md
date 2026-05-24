@@ -34,15 +34,22 @@ Inside the shell:
 /model fetch
 /model list
 /model use NAME
+/model add C:\Users\Jack\Models
+/model test
 /mode base
 /mode chatml
 /mode qwen
 /mode gemma
 /mode mistral
 /mode llama3
+/profile name Nova
+/device help cuda
+/theme rainbow
 /chat list
 /chat export markdown
 ```
+
+`/model add PATH` can point at either one model directory or a folder containing multiple model directories. `/model test` runs a one-token smoke test with load time and first-token timing. `/profile name NAME` changes the assistant label and stores it with the active model profile. During generation, Ctrl+C stops generation; on Windows terminals, double-tapping Tab also requests a stop between generated tokens.
 
 ## Prompt Modes
 
