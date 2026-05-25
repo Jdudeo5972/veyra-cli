@@ -47,6 +47,7 @@ Inside the shell:
 /model use NAME
 /model add PATH
 /model test
+/model remove NAME
 /mode qwen
 /profile name Nova
 /device list

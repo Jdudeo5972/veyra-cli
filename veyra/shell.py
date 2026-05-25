@@ -450,8 +450,7 @@ class VeyraShell:
         elif action == "inspect":
             self.inspect_current()
         elif action == "remove" and len(args) >= 2:
-            remove_model(self.config, args[1])
-            self.success(f"Removed {args[1]}.")
+            self.remove_model_command(args[1])
         else:
             self.warn("Usage: /model [list|use NAME|fetch|refresh|update [all]|test [NAME]|add PATH|inspect|remove NAME]")
 
@@ -463,6 +462,22 @@ class VeyraShell:
         for name, entry in models(self.config).items():
             mark = "*" if name == current else " "
             print(f"{mark} {self.theme.text('value', name)} {self.theme.text('muted', '(' + entry.get('source', 'unknown') + ')')}")
+
+    def remove_model_command(self, name: str) -> None:
+        installed = models(self.config)
+        if name not in installed:
+            self.error(f"Unknown model: {name}")
+            if installed:
+                self.warn("Installed models: " + ", ".join(sorted(installed)))
+            return
+        was_current = self.config.get("current_model") == name
+        remove_model(self.config, name)
+        if was_current:
+            self.runner = None
+            self.load_error = None
+        self.success(f"Removed {name}.")
+        if was_current:
+            self.warn("No current model selected. Use /model use NAME or /model add PATH.")
 
     def use_model(self, name: str) -> None:
         if name not in models(self.config):
