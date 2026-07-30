@@ -226,3 +226,7 @@ pipx install git+https://github.com/Jdudeo5972/veyra-cli.git
 ## Versioning
 
 Veyra uses calendar versions in `YEAR.MONTH.DAY` format, displayed and tagged with a leading `v`, such as `v2026.7.30`. Additional releases on the same day append a counter, such as `v2026.7.30.1`.
+
+## License
+
+Veyra is licensed under the [Apache License 2.0](LICENSE).
