@@ -2,8 +2,6 @@
 
 `veyra` is a lightweight Python CLI for running local ONNX causal language models. It opens a polished REPL with slash commands, history, autocomplete, autosuggestions, and streaming output.
 
-Repository: [Jdudeo5972/veyra-cli](https://github.com/Jdudeo5972/veyra-cli)
-
 ## Install
 
 From this checkout:
