@@ -9,7 +9,7 @@ Repository: [Jdudeo5972/veyra-cli](https://github.com/Jdudeo5972/veyra-cli)
 From this checkout:
 
 ```bash
-uv tool install .
+uv tool install
 ```
 
 From GitHub:
