@@ -1,6 +1,6 @@
 # Veyra
 
-`veyra` is a lightweight Python CLI for running local ONNX causal language models on CPU-first machines, including Raspberry Pi-class hardware. It opens a polished REPL with slash commands, history, autocomplete, autosuggestions, and streaming output.
+`veyra` is a lightweight Python CLI for running local ONNX causal language models. It opens a polished REPL with slash commands, history, autocomplete, autosuggestions, and streaming output.
 
 Repository: [Jdudeo5972/veyra-cli](https://github.com/Jdudeo5972/veyra-cli)
 
@@ -200,12 +200,6 @@ Chats are JSONL files in `~/.local/share/veyra/chats/`.
 
 Prompt history is stored at `~/.local/state/veyra/history.txt`.
 
-## Raspberry Pi Notes
-
-Veyra uses CPU-only ONNX Runtime by default with small thread counts: two intra-op threads and one inter-op thread. Int8 or Q4 ONNX models are recommended.
-
-The first prompt pass can still be slow on small CPUs, but supported cached exports reuse KV-cache or recurrent state for later generated tokens.
-
 ## Model Architecture
 
 Veyra treats architecture as metadata and uses ONNX graph inputs and outputs as the source of truth wherever possible.
@@ -228,3 +222,7 @@ Unsupported required inputs are reported clearly by `veyra inspect PATH`.
 uv tool install git+https://github.com/Jdudeo5972/veyra-cli.git
 pipx install git+https://github.com/Jdudeo5972/veyra-cli.git
 ```
+
+## Versioning
+
+Veyra currently follows the `0.7.x` release line. Routine updates increment the patch version (`0.7.1`, `0.7.2`, and so on) unless a new minor or major release is explicitly chosen.
