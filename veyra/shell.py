@@ -15,7 +15,14 @@ from prompt_toolkit.key_binding import KeyBindings
 from . import __version__
 from .chat_store import ChatStore
 from .completion import VeyraCompleter
-from .hf import download_model, list_veyra_models, registry_entry
+from .hf import (
+    download_model,
+    fetched_model_name,
+    list_veyra_models,
+    recommended_onnx_file,
+    registry_entry,
+    variant_name,
+)
 from .inspect import format_inspection, inspect_model
 from .prompts import PROMPT_MODES, format_prompt, infer_prompt_mode, normalize_mode
 from .registry import HISTORY_PATH, current_model_entry, load_config, models, register_model, remove_model, safe_model_name, save_config
@@ -501,16 +508,51 @@ class VeyraShell:
         if not raw.isdigit() or not (1 <= int(raw) <= len(choices)):
             self.warn("Cancelled.")
             return
-        repo_id = choices[int(raw) - 1]["repo_id"]
+        selected = choices[int(raw) - 1]
+        repo_id = selected["repo_id"]
+        onnx_file = self.select_onnx_variant(selected)
+        if not onnx_file:
+            return
         try:
-            path, commit = download_model(repo_id)
-            entry = registry_entry(repo_id, path, commit=commit)
-            register_model(self.config, safe_model_name(repo_id), entry)
+            path, commit = download_model(repo_id, onnx_file=onnx_file)
+            entry = registry_entry(
+                repo_id,
+                path,
+                commit=commit,
+                onnx_file=onnx_file,
+            )
+            name = fetched_model_name(repo_id, onnx_file, len(selected["onnx_files"]))
+            register_model(self.config, name, entry)
             self.runner = None
             self.load_current_model()
-            self.success(f"Fetched and selected {repo_id}.")
+            self.success(f"Fetched and selected {name} ({variant_name(onnx_file)}).")
         except Exception as exc:
             self.error(f"Fetch failed: {exc}")
+
+    def select_onnx_variant(self, model: dict) -> str | None:
+        variants = model.get("onnx_files", [])
+        if not variants:
+            self.error(f"No ONNX variants found in {model['repo_id']}.")
+            return None
+        if len(variants) == 1:
+            return variants[0]
+        recommended = recommended_onnx_file(variants)
+        print(self.theme.text("label", "Available ONNX variants:"))
+        for idx, path in enumerate(variants, 1):
+            suffix = " (recommended)" if path == recommended else ""
+            print(
+                f"{self.theme.text('label', str(idx) + '.')} "
+                f"{self.theme.text('value', path)}"
+                f"{self.theme.text('muted', suffix)}"
+            )
+        default = variants.index(recommended) + 1
+        raw = input(f"Select variant number [{default}]: ").strip()
+        if not raw:
+            return recommended
+        if not raw.isdigit() or not (1 <= int(raw) <= len(variants)):
+            self.warn("Cancelled.")
+            return None
+        return variants[int(raw) - 1]
 
     def remote_list(self):
         try:
@@ -533,8 +575,25 @@ class VeyraShell:
                 self.warn(f"Skipping {name}: not a Hugging Face model.")
                 continue
             try:
-                path, commit = download_model(entry["repo_id"], entry.get("revision", "main"))
-                entry.update({"path": str(path), "downloaded_commit": commit})
+                onnx_file = entry.get("onnx_file")
+                if not onnx_file and entry.get("path"):
+                    info = inspect_model(entry["path"])
+                    onnx_file = info.onnx_path.relative_to(info.model_dir).as_posix()
+                path, commit = download_model(
+                    entry["repo_id"],
+                    entry.get("revision", "main"),
+                    onnx_file=onnx_file,
+                )
+                refreshed = registry_entry(
+                    entry["repo_id"],
+                    path,
+                    revision=entry.get("revision", "main"),
+                    commit=commit,
+                    onnx_file=onnx_file,
+                )
+                if entry.get("profile"):
+                    refreshed["profile"] = entry["profile"]
+                entry.update(refreshed)
                 self.success(f"Updated {name}.")
             except Exception as exc:
                 self.error(f"Could not update {name}: {exc}")

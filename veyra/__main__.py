@@ -4,7 +4,14 @@ import argparse
 import sys
 from pathlib import Path
 
-from .hf import download_model, list_veyra_models, registry_entry
+from .hf import (
+    download_model,
+    fetched_model_name,
+    list_veyra_models,
+    recommended_onnx_file,
+    registry_entry,
+    variant_name,
+)
 from .inspect import format_inspection, inspect_model
 from .prompts import format_prompt, infer_prompt_mode
 from .registry import load_config, register_model, safe_model_name
@@ -93,12 +100,49 @@ def fetch_cmd() -> int:
     if not raw.isdigit() or not (1 <= int(raw) <= len(choices)):
         print("Cancelled.")
         return 1
-    repo_id = choices[int(raw) - 1]["repo_id"]
-    path, commit = download_model(repo_id)
-    config = load_config()
-    register_model(config, safe_model_name(repo_id), registry_entry(repo_id, path, commit=commit))
-    print(f"Fetched and selected {repo_id}.")
+    selected = choices[int(raw) - 1]
+    repo_id = selected["repo_id"]
+    onnx_file = select_onnx_variant(selected)
+    if not onnx_file:
+        return 1
+    try:
+        path, commit = download_model(repo_id, onnx_file=onnx_file)
+        config = load_config()
+        name = fetched_model_name(repo_id, onnx_file, len(selected["onnx_files"]))
+        entry = registry_entry(
+            repo_id,
+            path,
+            commit=commit,
+            onnx_file=onnx_file,
+        )
+        register_model(config, name, entry)
+    except Exception as exc:
+        print(f"Fetch failed: {exc}")
+        return 1
+    print(f"Fetched and selected {name} ({variant_name(onnx_file)}).")
     return 0
+
+
+def select_onnx_variant(model: dict) -> str | None:
+    variants = model.get("onnx_files", [])
+    if not variants:
+        print(f"No ONNX variants found in {model['repo_id']}.")
+        return None
+    if len(variants) == 1:
+        return variants[0]
+    recommended = recommended_onnx_file(variants)
+    print("Available ONNX variants:")
+    for idx, path in enumerate(variants, 1):
+        suffix = " (recommended)" if path == recommended else ""
+        print(f"{idx}. {path}{suffix}")
+    default = variants.index(recommended) + 1
+    raw = input(f"Select variant number [{default}]: ").strip()
+    if not raw:
+        return recommended
+    if not raw.isdigit() or not (1 <= int(raw) <= len(variants)):
+        print("Cancelled.")
+        return None
+    return variants[int(raw) - 1]
 
 
 def add_cmd(argv: list[str]) -> int:

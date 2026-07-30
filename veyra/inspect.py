@@ -51,7 +51,8 @@ def find_onnx_file(model_dir: str | Path) -> Path:
         files = sorted(root.rglob("*.onnx"))
     if not files:
         raise FileNotFoundError(f"No .onnx file found in {root}")
-    return files[0]
+    model_files = [path for path in files if path.stem.casefold().startswith("model")]
+    return model_files[0] if model_files else files[0]
 
 
 def inspect_model(model_dir: str | Path) -> ModelInspection:

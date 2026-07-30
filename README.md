@@ -62,6 +62,18 @@ Inside the shell:
 
 During generation, Ctrl+C stops generation. On Windows terminals, double-tapping Tab also requests a stop between generated tokens.
 
+## Fetching Models
+
+`veyra fetch` and `/model fetch` list compatible private or public repositories from the `veyra-ai` Hugging Face organization. If a repository contains several exports under `onnx/`, Veyra asks which variant to install and recommends Int8 when available. Only the selected model variant, any required companion ONNX files, and tokenizer/config metadata are downloaded.
+
+Sign in before fetching private models:
+
+```bash
+hf auth login
+```
+
+Compatible ONNX repositories must include `tokenizer.json` alongside their model configuration.
+
 ## Shell Commands
 
 Core:
