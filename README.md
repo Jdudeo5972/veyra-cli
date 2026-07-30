@@ -225,4 +225,4 @@ pipx install git+https://github.com/Jdudeo5972/veyra-cli.git
 
 ## Versioning
 
-Veyra currently follows the `0.7.x` release line. Routine updates increment the patch version (`0.7.1`, `0.7.2`, and so on) unless a new minor or major release is explicitly chosen.
+Veyra uses calendar versions in `YEAR.MONTH.DAY` format, displayed and tagged with a leading `v`, such as `v2026.7.30`. Additional releases on the same day append a counter, such as `v2026.7.30.1`.
