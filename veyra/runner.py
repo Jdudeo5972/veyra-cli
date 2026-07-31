@@ -12,12 +12,8 @@ from .inspect import SUPPORTED_INPUTS, find_onnx_file, is_past_input, missing_ca
 
 DEVICE_PROVIDERS = {
     "cpu": "CPUExecutionProvider",
-    "cuda": "CUDAExecutionProvider",
     "directml": "DmlExecutionProvider",
-    "coreml": "CoreMLExecutionProvider",
     "openvino": "OpenVINOExecutionProvider",
-    "rocm": "ROCMExecutionProvider",
-    "tensorrt": "TensorrtExecutionProvider",
 }
 
 
@@ -57,11 +53,22 @@ class OnnxCausalLMRunner:
         self.eos_ids = self._eos_ids()
         self.embed_session = None
 
+        self.device = normalize_device(device)
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = max(1, int(threads or 2))
         opts.inter_op_num_threads = 1
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        self.device = normalize_device(device)
+        if self.device == "directml":
+            opts.enable_mem_pattern = False
+            opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            opts.log_severity_level = 3
+        elif self.device == "openvino":
+            opts.log_severity_level = 3
+            try:
+                import openvino  # noqa: F401
+            except ImportError:
+                pass
+        self.session_options = opts
         provider = provider_for_device(self.device)
         available = ort.get_available_providers()
         if provider not in available:
@@ -69,7 +76,17 @@ class OnnxCausalLMRunner:
                 f"Device '{self.device}' requires ONNX Runtime provider {provider}, but it is not available. "
                 f"Available devices: {', '.join(available_devices())}. {device_install_hint(self.device)}"
             )
-        self.session = ort.InferenceSession(str(self.onnx_path), sess_options=opts, providers=[provider])
+        self.session_provider = _provider_spec(self.device)
+        self.session = ort.InferenceSession(
+            str(self.onnx_path),
+            sess_options=opts,
+            providers=[self.session_provider],
+        )
+        if provider not in self.session.get_providers():
+            raise RuntimeError(
+                f"{provider} was advertised but failed to initialize and fell back to "
+                f"{', '.join(self.session.get_providers())}. {device_install_hint(self.device)}"
+            )
         self.inputs = self.session.get_inputs()
         self.outputs = self.session.get_outputs()
         self.input_by_name = {i.name: i for i in self.inputs}
@@ -284,7 +301,11 @@ class OnnxCausalLMRunner:
         candidates = [self.model_dir / "embed_tokens.onnx", self.model_dir / "onnx" / "embed_tokens.onnx"]
         for path in candidates:
             if path.exists():
-                return ort.InferenceSession(str(path), providers=[provider_for_device(self.device)])
+                return ort.InferenceSession(
+                    str(path),
+                    sess_options=self.session_options,
+                    providers=[self.session_provider],
+                )
         raise RuntimeError("Model expects inputs_embeds, but embed_tokens.onnx was not found.")
 
     def _embed(self, input_ids: np.ndarray) -> np.ndarray:
@@ -404,13 +425,20 @@ def _rank(input_info: Any) -> int:
 
 def normalize_device(name: str | None) -> str:
     value = str(name or "cpu").strip().lower()
-    aliases = {"gpu": "cuda", "dml": "directml"}
+    aliases = {"dml": "directml"}
     value = aliases.get(value, value)
     return value if value in DEVICE_PROVIDERS else "cpu"
 
 
 def provider_for_device(name: str | None) -> str:
     return DEVICE_PROVIDERS[normalize_device(name)]
+
+
+def _provider_spec(name: str):
+    provider = provider_for_device(name)
+    if normalize_device(name) == "openvino":
+        return provider, {"device_type": "AUTO"}
+    return provider
 
 
 def available_devices() -> list[str]:
@@ -435,19 +463,14 @@ def device_install_hint(name: str | None) -> str:
     device = normalize_device(name)
     if device == "cpu":
         return "CPU should be available with the standard onnxruntime package."
-    if device == "cuda":
-        return "Install a CUDA-enabled ONNX Runtime build, usually `onnxruntime-gpu`, plus compatible NVIDIA CUDA/cuDNN drivers."
     if device == "directml":
         return (
             "DirectML is included by default on 64-bit Windows. In another environment, "
             "replace `onnxruntime` with `onnxruntime-directml`."
         )
     if device == "openvino":
-        return "Install an OpenVINO-enabled ONNX Runtime build for Intel acceleration."
-    if device == "rocm":
-        return "Install a ROCm-enabled ONNX Runtime build for AMD GPU acceleration."
-    if device == "tensorrt":
-        return "Install a TensorRT-enabled ONNX Runtime build and NVIDIA TensorRT runtime."
-    if device == "coreml":
-        return "Use an ONNX Runtime build that includes CoreMLExecutionProvider on macOS."
+        return (
+            "Install a matching `onnxruntime-openvino` runtime; Windows also requires the matching `openvino` package. "
+            "OpenVINO and DirectML ONNX Runtime wheels replace one another in a Python environment."
+        )
     return ""

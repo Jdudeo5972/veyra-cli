@@ -80,7 +80,7 @@ def load_config() -> dict[str, Any]:
         config["theme"] = "blue"
     elif theme not in THEMES:
         config["theme"] = "veyra"
-    if config.get("device") not in {"cpu", "cuda", "directml", "coreml", "openvino", "rocm", "tensorrt"}:
+    if config.get("device") not in {"cpu", "directml", "openvino"}:
         config["device"] = "cpu"
     config["current_mode"] = normalize_mode(config.get("current_mode"))
     if not isinstance(config.get("stats"), bool):

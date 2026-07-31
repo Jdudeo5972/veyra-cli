@@ -69,12 +69,8 @@ DEVICE = {
     "list": "List available devices",
     "help": "Show provider install hint",
     "cpu": "CPU execution provider",
-    "cuda": "NVIDIA CUDA provider",
     "directml": "Windows DirectML provider",
-    "coreml": "Apple Core ML provider",
-    "openvino": "Intel OpenVINO provider",
-    "rocm": "AMD ROCm provider",
-    "tensorrt": "NVIDIA TensorRT provider",
+    "openvino": "OpenVINO AUTO provider",
 }
 STATS = {"on": "Show response stats", "off": "Hide response stats"}
 CHAT = {

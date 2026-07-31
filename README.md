@@ -49,7 +49,7 @@ Inside the shell:
 /mode qwen
 /profile name Nova
 /device list
-/device help cuda
+/device help openvino
 /stats on
 /theme rainbow
 /chat list
@@ -122,7 +122,7 @@ Profile, device, and appearance:
 /device
 /device list
 /device help DEVICE
-/device cpu|cuda|directml|coreml|openvino|rocm|tensorrt
+/device cpu|directml|openvino
 /theme list
 /theme veyra|warm|red|pink|lime|green|blue|cyan|purple|orange|gray|rainbow|mono
 /autoload on|off
@@ -171,14 +171,21 @@ Veyra defaults to CPU. Use `/device list` to see ONNX Runtime execution provider
 Common providers:
 
 - `cpu`: standard `onnxruntime`, or the CPU provider included with the Windows DirectML build
-- `cuda`: usually requires `onnxruntime-gpu` plus compatible NVIDIA CUDA/cuDNN drivers
 - `directml`: included by default on 64-bit Windows through `onnxruntime-directml`
-- `openvino`: requires an OpenVINO-enabled ONNX Runtime build
-- `rocm`: requires a ROCm-enabled ONNX Runtime build
-- `tensorrt`: requires TensorRT runtime and provider support
-- `coreml`: requires CoreML provider support on macOS
+- `openvino`: uses OpenVINO `AUTO` selection across supported CPU and GPU devices when an OpenVINO-enabled ONNX Runtime build is installed
 
-Run `/device help cuda` or another provider name for a short install hint.
+Run `/device help openvino` or another provider name for a short install hint. DirectML and OpenVINO use separate ONNX Runtime builds and cannot be installed together reliably in the same Python environment. The Windows OpenVINO combination tested for this release is `onnxruntime-openvino==1.24.1` with `openvino==2025.4.1`.
+
+GPU acceleration is not always faster for small autoregressive models because each generated token requires a separate runtime call. Use `/stats on` to compare providers on the model and hardware you actually use.
+
+### Future Device Plans
+
+The following providers will return after they have been tested end to end with Veyra models:
+
+- NVIDIA CUDA
+- NVIDIA TensorRT
+- AMD ROCm
+- Apple Core ML
 
 ## Stats
 

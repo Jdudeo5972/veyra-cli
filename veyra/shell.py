@@ -302,7 +302,7 @@ class VeyraShell:
             ("/mode", "[base|chatml|qwen|gemma|mistral|llama3]"),
             ("/theme", "[list|veyra|warm|red|pink|lime|green|blue|cyan|purple|orange|gray|rainbow|mono]"),
             ("/profile", "[show|name NAME|mode MODE]"),
-            ("/device", "[list|cpu|cuda|directml|coreml|openvino|rocm|tensorrt]"),
+            ("/device", "[list|cpu|directml|openvino]"),
             ("/stats", "[on|off]"),
             ("/autoload", "[on|off]"),
             ("/temp", "VALUE  /tokens N  /topk N  /topp VALUE  /repetition VALUE"),
@@ -422,6 +422,8 @@ class VeyraShell:
         if models(self.config) and self.config.get("current_model"):
             self.load_current_model()
         self.success(f"device: {selected} ({provider_for_device(selected)})")
+        if selected == "directml":
+            self.warn("DirectML can be slower than CPU for small token-by-token models; use /stats on to compare.")
 
     def stats_command(self, args: list[str]) -> None:
         if not args:
