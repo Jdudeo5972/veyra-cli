@@ -438,7 +438,10 @@ def device_install_hint(name: str | None) -> str:
     if device == "cuda":
         return "Install a CUDA-enabled ONNX Runtime build, usually `onnxruntime-gpu`, plus compatible NVIDIA CUDA/cuDNN drivers."
     if device == "directml":
-        return "Install a DirectML-enabled ONNX Runtime build, usually `onnxruntime-directml` on Windows."
+        return (
+            "DirectML is included by default on 64-bit Windows. In another environment, "
+            "replace `onnxruntime` with `onnxruntime-directml`."
+        )
     if device == "openvino":
         return "Install an OpenVINO-enabled ONNX Runtime build for Intel acceleration."
     if device == "rocm":
