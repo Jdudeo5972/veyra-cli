@@ -201,10 +201,10 @@ class VeyraShell:
             [[], [("label", "  Tips for getting started")]],
             [[("muted", "    "), (status_role, "\u25cf " + state)], [("label", "  Model: "), ("value", model)]],
             [[("muted", f"    autoload: {autoload}")], [("label", "  Mode:  "), ("value", mode)]],
-            [[], []],
             [[("muted", "    Using local ONNX engine")], [("label", "  Generation Settings")]],
             [[("muted", "    Type /help for commands")], [("value", f"  output:{defaults.get('max_new_tokens', 128)} temp:{defaults.get('temperature', 0.8)} top-k:{defaults.get('top_k', 40)}")]],
-            [[], [("value", f"  context:{context_text} repeat:{defaults.get('repetition_penalty', 1.0)} top-p:{defaults.get('top_p', 1.0)}")]],
+            [[], [("value", f"  repeat:{defaults.get('repetition_penalty', 1.0)} top-p:{defaults.get('top_p', 1.0)}")]],
+            [[], [("value", f"  context:{context_text}")]],
         ]
 
     def chat_names(self) -> list[str]:
