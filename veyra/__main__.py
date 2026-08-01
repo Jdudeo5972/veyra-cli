@@ -7,6 +7,7 @@ from pathlib import Path
 from .hf import (
     download_model,
     fetched_model_name,
+    get_hf_model,
     list_veyra_models,
     recommended_onnx_file,
     registry_entry,
@@ -40,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     if command == "models":
         return models_cmd()
     if command == "fetch":
-        return fetch_cmd()
+        return fetch_cmd(argv[1] if len(argv) >= 2 else None)
     if command == "add":
         return add_cmd(argv[1:])
     if command == "inspect":
@@ -64,13 +65,24 @@ def run_prompt(prompt: str) -> int:
     if not entry:
         print("Missing model. Use `veyra fetch` or `veyra add PATH`.")
         return 1
-    mode = config.get("current_mode", "chatml")
+    profile = entry.get("profile", {}) if isinstance(entry.get("profile"), dict) else {}
+    mode = profile.get("mode", config.get("current_mode", "chatml"))
     formatted = format_prompt(prompt, mode)
-    runner = OnnxCausalLMRunner(entry["path"], device=config.get("device", "cpu"))
-    for delta in runner.generate(formatted, **config.get("defaults", {})):
-        print(delta, end="", flush=True)
-    print("")
-    return 0
+    try:
+        runner = OnnxCausalLMRunner(entry["path"], device=config.get("device", "cpu"))
+        defaults = dict(config.get("defaults", {}))
+        if isinstance(profile.get("generation"), dict):
+            defaults.update(profile["generation"])
+        for delta in runner.generate(formatted, **defaults):
+            print(delta, end="", flush=True)
+        print("")
+        return 0
+    except KeyboardInterrupt:
+        print("\nGeneration stopped.")
+        return 130
+    except Exception as exc:
+        print(f"Generation failed: {exc}")
+        return 1
 
 
 def models_cmd() -> int:
@@ -86,21 +98,28 @@ def models_cmd() -> int:
     return 0
 
 
-def fetch_cmd() -> int:
-    try:
-        choices = list_veyra_models()
-    except Exception as exc:
-        print(f"Could not query Hugging Face: {exc}")
-        return 1
-    for idx, item in enumerate(choices, 1):
-        print(f"{idx}. {item['repo_id']}")
-    if not choices:
-        return 0
-    raw = input("Select model number: ").strip()
-    if not raw.isdigit() or not (1 <= int(raw) <= len(choices)):
-        print("Cancelled.")
-        return 1
-    selected = choices[int(raw) - 1]
+def fetch_cmd(repo_id: str | None = None) -> int:
+    if repo_id:
+        try:
+            selected = get_hf_model(repo_id)
+        except Exception as exc:
+            print(f"Fetch failed: {exc}")
+            return 1
+    else:
+        try:
+            choices = list_veyra_models()
+        except Exception as exc:
+            print(f"Could not query Hugging Face: {exc}")
+            return 1
+        for idx, item in enumerate(choices, 1):
+            print(f"{idx}. {item['repo_id']}")
+        if not choices:
+            return 0
+        raw = input("Select model number: ").strip()
+        if not raw.isdigit() or not (1 <= int(raw) <= len(choices)):
+            print("Cancelled.")
+            return 1
+        selected = choices[int(raw) - 1]
     repo_id = selected["repo_id"]
     onnx_file = select_onnx_variant(selected)
     if not onnx_file:

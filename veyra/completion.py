@@ -9,9 +9,12 @@ TOP = {
     "/mode": "Show or change prompt mode",
     "/chat": "Manage saved chats",
     "/theme": "Change CLI color theme",
-    "/profile": "Model display profile",
+    "/profile": "Show model-specific settings",
     "/device": "Select ONNX Runtime device",
     "/stats": "Toggle response stats",
+    "/retry": "Regenerate the last response",
+    "/seed": "Set deterministic sampling seed",
+    "/context": "Set sliding context window",
     "/autoload": "Toggle model autoload on startup",
     "/temp": "Set or show sampling temperature",
     "/tokens": "Set or show max new tokens",
@@ -21,6 +24,7 @@ TOP = {
     "/system": "Set or clear the system prompt",
     "/update": "Show CLI update instructions",
     "/status": "Show runtime status",
+    "/doctor": "Check runtime and model health",
     "/help": "Show commands",
     "/exit": "Exit Veyra",
     "/quit": "Exit Veyra",
@@ -30,12 +34,13 @@ TOP = {
 MODEL = {
     "list": "List installed models",
     "use": "Switch current model",
-    "fetch": "Fetch ONNX models from veyra-ai",
+    "fetch": "Fetch a Veyra or arbitrary Hugging Face model",
     "refresh": "Refresh remote model list",
     "update": "Update installed model files",
     "test": "Run a one-token model smoke test",
     "add": "Add local ONNX model",
     "inspect": "Inspect current model",
+    "info": "Show model metadata and profile",
     "remove": "Remove model from registry",
 }
 
@@ -73,6 +78,8 @@ DEVICE = {
     "openvino": "OpenVINO AUTO provider",
 }
 STATS = {"on": "Show response stats", "off": "Hide response stats"}
+SEED = {"random": "Use a random seed"}
+CONTEXT = {"auto": "Use the model context limit"}
 CHAT = {
     "new": "Start a new chat",
     "list": "List saved chats",
@@ -120,6 +127,10 @@ class VeyraCompleter(Completer):
                 for name in self.model_names_cb():
                     if name.startswith(current):
                         yield Completion(name, start_position=start)
+            elif len(parts) == 3 and parts[1] == "info":
+                for name in self.model_names_cb():
+                    if name.startswith(current):
+                        yield Completion(name, start_position=start)
         elif command == "/mode" and len(parts) == 2:
             yield from _dict_completions(MODE, current, start)
         elif command == "/autoload" and len(parts) == 2:
@@ -134,6 +145,10 @@ class VeyraCompleter(Completer):
             yield from _dict_completions(DEVICE, current, start)
         elif command == "/stats" and len(parts) == 2:
             yield from _dict_completions(STATS, current, start)
+        elif command == "/seed" and len(parts) == 2:
+            yield from _dict_completions(SEED, current, start)
+        elif command == "/context" and len(parts) == 2:
+            yield from _dict_completions(CONTEXT, current, start)
         elif command == "/chat" and len(parts) == 2:
             yield from _dict_completions(CHAT, current, start)
         elif command == "/chat" and len(parts) == 3 and parts[1] in {"load", "rename"}:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import os
+import platform
 import sys
 import time
 from pathlib import Path
@@ -18,6 +20,7 @@ from .completion import VeyraCompleter
 from .hf import (
     download_model,
     fetched_model_name,
+    get_hf_model,
     list_veyra_models,
     recommended_onnx_file,
     registry_entry,
@@ -25,8 +28,8 @@ from .hf import (
 )
 from .inspect import format_inspection, inspect_model
 from .prompts import PROMPT_MODES, format_prompt, infer_prompt_mode, normalize_mode
-from .registry import HISTORY_PATH, current_model_entry, load_config, models, register_model, remove_model, safe_model_name, save_config
-from .runner import OnnxCausalLMRunner, UnsupportedModelError, available_devices, device_install_hint, device_rows, normalize_device, provider_for_device
+from .registry import CHATS_DIR, CONFIG_PATH, HISTORY_PATH, MODELS_DIR, current_model_entry, load_config, models, register_model, remove_model, safe_model_name, save_config
+from .runner import OnnxCausalLMRunner, UnsupportedModelError, available_devices, device_install_hint, device_rows, model_context_length, normalize_device, provider_for_device
 from .theme import THEMES, get_theme, normalize_theme
 
 
@@ -224,10 +227,20 @@ class VeyraShell:
             return
         assert self.runner is not None
         mode = self.config.get("current_mode", "chatml")
-        history = self.chat.history() if mode == "chatml" and self.chat else []
-        prompt = format_prompt(text, mode, history=history, system_prompt=self.system_prompt)
+        history = self.chat.history() if mode != "base" and self.chat else []
+        self.generate_response(text, history, append_user=True)
+
+    def generate_response(self, text: str, history: list[dict[str, str]], append_user: bool) -> None:
+        assert self.runner is not None
         defaults = self.config.get("defaults", {})
-        if self.chat:
+        try:
+            prompt, dropped = self.prompt_with_sliding_window(text, history, defaults)
+        except ValueError as exc:
+            self.error(str(exc))
+            return
+        if dropped:
+            self.warn(f"Context window: dropped {dropped} oldest message{'s' if dropped != 1 else ''}.")
+        if append_user and self.chat:
             self.chat.message("user", text)
         print(self.theme.text("assistant_prompt", f"{self.assistant_name()} \u203a "), end="", flush=True)
         chunks: list[str] = []
@@ -257,6 +270,32 @@ class VeyraShell:
             if chunks and self.chat:
                 self.chat.message("assistant", "".join(chunks))
 
+    def prompt_with_sliding_window(
+        self,
+        text: str,
+        history: list[dict[str, str]],
+        defaults: dict,
+    ) -> tuple[str, int]:
+        assert self.runner is not None
+        mode = self.config.get("current_mode", "chatml")
+        remaining = list(history)
+        limit = defaults.get("context_length") or self.runner.max_context_length
+        output_budget = max(0, int(defaults.get("max_new_tokens", 128)))
+        if self.runner.max_context_length and limit and int(limit) > self.runner.max_context_length:
+            raise ValueError(f"Context length {limit} exceeds this model's limit of {self.runner.max_context_length}.")
+        dropped = 0
+        while True:
+            prompt = format_prompt(text, mode, history=remaining, system_prompt=self.system_prompt)
+            if not limit or self.runner.token_count(prompt) + output_budget <= int(limit):
+                return prompt, dropped
+            if not remaining:
+                raise ValueError(
+                    f"The current prompt plus {output_budget} output tokens does not fit in the {limit}-token context window."
+                )
+            remove_count = 2 if len(remaining) >= 2 and remaining[0].get("role") == "user" and remaining[1].get("role") == "assistant" else 1
+            del remaining[:remove_count]
+            dropped += remove_count
+
     def handle_command(self, text: str) -> bool:
         parts = text.split()
         cmd = parts[0]
@@ -267,6 +306,10 @@ class VeyraShell:
             self.help()
         elif cmd == "/status":
             self.status()
+        elif cmd == "/doctor":
+            self.doctor()
+        elif cmd == "/retry":
+            self.retry_command()
         elif cmd == "/clear":
             self.clear_visible_screen(force=True)
         elif cmd == "/model":
@@ -283,7 +326,7 @@ class VeyraShell:
             self.stats_command(args)
         elif cmd == "/autoload":
             self.autoload_command(args)
-        elif cmd in {"/temp", "/tokens", "/topk", "/topp", "/repetition"}:
+        elif cmd in {"/temp", "/tokens", "/topk", "/topp", "/repetition", "/seed", "/context"}:
             self.default_command(cmd, args)
         elif cmd == "/system":
             self.system_prompt = text.removeprefix("/system").strip() or None
@@ -298,7 +341,7 @@ class VeyraShell:
 
     def help(self) -> None:
         rows = [
-            ("/model", "[list|use|fetch|refresh|update|test|add|inspect|remove]"),
+            ("/model", "[list|use|fetch|refresh|update|test|add|inspect|info|remove]"),
             ("/mode", "[base|chatml|qwen|gemma|mistral|llama3]"),
             ("/theme", "[list|veyra|warm|red|pink|lime|green|blue|cyan|purple|orange|gray|rainbow|mono]"),
             ("/profile", "[show|name NAME|mode MODE]"),
@@ -306,9 +349,10 @@ class VeyraShell:
             ("/stats", "[on|off]"),
             ("/autoload", "[on|off]"),
             ("/temp", "VALUE  /tokens N  /topk N  /topp VALUE  /repetition VALUE"),
+            ("/seed", "[N|random]  /context [N|auto]  /retry"),
             ("/system", "TEXT  /update"),
             ("/chat", "[new|list|load|rename|export|path]"),
-            ("/status", " /clear  /help  /exit  /quit"),
+            ("/status", " /doctor  /clear  /help  /exit  /quit"),
         ]
         for command, rest in rows:
             print(self.theme.text("command", command) + (" " + rest if rest else ""))
@@ -330,9 +374,7 @@ class VeyraShell:
             print(self.theme.text("muted", "available: ") + " ".join(self.theme.text("command", name) for name in THEMES))
             return
         if args[0] == "help":
-            target = normalize_device(args[1] if len(args) > 1 else current)
-            print(self.theme.text("label", target + " ") + self.theme.text("value", provider_for_device(target)))
-            self.warn(device_install_hint(target))
+            self.warn("Usage: /theme [list|" + "|".join(THEMES) + "]")
             return
         if args[0] == "list":
             print(" ".join(self.theme.text("command", name) for name in THEMES))
@@ -378,6 +420,19 @@ class VeyraShell:
         print(self.theme.text("label", "name   ") + self.theme.text("value", self.assistant_name()))
         print(self.theme.text("label", "model  ") + self.theme.text("value", self.config.get("current_model") or "none"))
         print(self.theme.text("label", "mode   ") + self.theme.text("value", self.config.get("current_mode", "chatml")))
+        defaults = self.config.get("defaults", {})
+        for label, key in (
+            ("tokens", "max_new_tokens"),
+            ("temp", "temperature"),
+            ("top-k", "top_k"),
+            ("top-p", "top_p"),
+            ("repeat", "repetition_penalty"),
+            ("seed", "seed"),
+            ("context", "context_length"),
+        ):
+            value = defaults.get(key)
+            empty = "random" if key == "seed" else "auto"
+            print(self.theme.text("label", label.ljust(9)) + self.theme.text("value", str(value if value is not None else empty)))
 
     def device_command(self, args: list[str]) -> None:
         current = normalize_device(self.config.get("device"))
@@ -447,7 +502,7 @@ class VeyraShell:
         elif action == "use" and len(args) >= 2:
             self.use_model(args[1])
         elif action == "fetch":
-            self.fetch_model()
+            self.fetch_model(args[1] if len(args) >= 2 else None)
         elif action == "refresh":
             self.remote_list()
         elif action == "update":
@@ -458,10 +513,12 @@ class VeyraShell:
             self.add_model(args[1], None)
         elif action == "inspect":
             self.inspect_current()
+        elif action == "info":
+            self.model_info(args[1] if len(args) >= 2 else None)
         elif action == "remove" and len(args) >= 2:
             self.remove_model_command(args[1])
         else:
-            self.warn("Usage: /model [list|use NAME|fetch|refresh|update [all]|test [NAME]|add PATH|inspect|remove NAME]")
+            self.warn("Usage: /model [list|use NAME|fetch [REPO_ID]|refresh|update [all]|test [NAME]|add PATH|inspect|info [NAME]|remove NAME]")
 
     def list_models(self) -> None:
         if not models(self.config):
@@ -493,24 +550,27 @@ class VeyraShell:
             self.error(f"Unknown model: {name}")
             return
         self.config["current_model"] = name
-        entry = models(self.config)[name]
-        if entry.get("mode"):
-            self.config["current_mode"] = entry["mode"]
-        self.apply_model_profile(entry)
         save_config(self.config)
         self.runner = None
         if self.load_current_model():
             self.success(f"Using {name}.")
 
-    def fetch_model(self) -> None:
-        choices = self.remote_list()
-        if not choices:
-            return
-        raw = input("Select model number: ").strip()
-        if not raw.isdigit() or not (1 <= int(raw) <= len(choices)):
-            self.warn("Cancelled.")
-            return
-        selected = choices[int(raw) - 1]
+    def fetch_model(self, repo_id: str | None = None) -> None:
+        if repo_id:
+            try:
+                selected = get_hf_model(repo_id)
+            except Exception as exc:
+                self.error(f"Fetch failed: {exc}")
+                return
+        else:
+            choices = self.remote_list()
+            if not choices:
+                return
+            raw = input("Select model number: ").strip()
+            if not raw.isdigit() or not (1 <= int(raw) <= len(choices)):
+                self.warn("Cancelled.")
+                return
+            selected = choices[int(raw) - 1]
         repo_id = selected["repo_id"]
         onnx_file = self.select_onnx_variant(selected)
         if not onnx_file:
@@ -661,6 +721,41 @@ class VeyraShell:
             return
         print(format_inspection(inspect_model(entry["path"])))
 
+    def model_info(self, name: str | None = None) -> None:
+        target = name or self.config.get("current_model")
+        entry = models(self.config).get(target)
+        if not entry:
+            self.error(f"Unknown model: {target}")
+            return
+        root = Path(entry["path"])
+        config = info_config(root)
+        tokenizer_config = info_config(root, "tokenizer_config.json")
+        limit = model_context_length(config, tokenizer_config)
+        try:
+            info = inspect_model(root)
+            onnx = info.onnx_path.relative_to(root)
+            size = info.onnx_path.stat().st_size / (1024 * 1024)
+            cache = f"yes ({len(info.cache_inputs) // 2} layers)" if info.cache_inputs else "no"
+            supported = "yes" if info.supported else "no"
+        except Exception as exc:
+            self.error(f"Could not inspect {target}: {exc}")
+            return
+        rows = {
+            "model": target,
+            "source": entry.get("source", "unknown"),
+            "repo": entry.get("repo_id") or "local",
+            "path": str(root),
+            "onnx": f"{onnx} ({size:.1f} MiB)",
+            "architecture": entry.get("architecture") or info.model_type or info.architecture or "unknown",
+            "context": str(limit or "unknown"),
+            "kv cache": cache,
+            "supported": supported,
+            "mode": entry.get("profile", {}).get("mode", entry.get("mode", "chatml")),
+            "generation": self.generation_summary(entry),
+        }
+        for label, value in rows.items():
+            print(self.theme.text("label", label.ljust(13)) + self.theme.text("value", str(value)))
+
     def mode_command(self, args: list[str]) -> None:
         if not args:
             print(self.theme.text("label", "mode   ") + self.theme.text("value", self.config.get("current_mode", "chatml")))
@@ -688,15 +783,150 @@ class VeyraShell:
         self.success(f"autoload: {'on' if self.config['autoload'] else 'off'}")
 
     def default_command(self, cmd: str, args: list[str]) -> None:
-        names = {"/temp": "temperature", "/tokens": "max_new_tokens", "/topk": "top_k", "/topp": "top_p", "/repetition": "repetition_penalty"}
+        names = {
+            "/temp": "temperature",
+            "/tokens": "max_new_tokens",
+            "/topk": "top_k",
+            "/topp": "top_p",
+            "/repetition": "repetition_penalty",
+            "/seed": "seed",
+            "/context": "context_length",
+        }
         key = names[cmd]
         if not args:
-            print(self.theme.text("label", key + ": ") + self.theme.text("value", str(self.config["defaults"][key])))
+            value = self.config["defaults"].get(key)
+            if key == "context_length":
+                limit = self.current_model_limit()
+                shown = str(value) if value is not None else f"auto ({limit or 'unknown'})"
+            elif key == "seed":
+                shown = str(value) if value is not None else "random"
+            else:
+                shown = str(value)
+            print(self.theme.text("label", key + ": ") + self.theme.text("value", shown))
             return
-        value = int(args[0]) if key in {"max_new_tokens", "top_k"} else float(args[0])
+        raw = args[0].lower()
+        if key in {"seed", "context_length"} and raw in {"auto", "random", "off"}:
+            value = None
+        else:
+            try:
+                value = int(args[0]) if key in {"max_new_tokens", "top_k", "seed", "context_length"} else float(args[0])
+            except ValueError:
+                self.error(f"Invalid value for {cmd}: {args[0]}")
+                return
+        if key in {"max_new_tokens", "context_length"} and value is not None and value <= 0:
+            self.error(f"{key} must be greater than zero.")
+            return
+        if key == "seed" and value is not None and value < 0:
+            self.error("seed must be zero or greater.")
+            return
+        if key == "context_length" and value is not None:
+            model_limit = self.current_model_limit()
+            if self.current_entry() is not None and model_limit is None:
+                self.error("This model does not declare a context limit, so Veyra cannot validate a custom context length.")
+                return
+            if model_limit and value > model_limit:
+                self.error(f"Context length {value} exceeds this model's limit of {model_limit}.")
+                return
+            if value <= int(self.config["defaults"].get("max_new_tokens", 128)):
+                self.error("Context length must be larger than max_new_tokens.")
+                return
+        if key == "max_new_tokens" and value is not None:
+            context = self.config["defaults"].get("context_length") or self.current_model_limit()
+            if context and value >= context:
+                self.error(f"max_new_tokens must be smaller than the {context}-token context window.")
+                return
         self.config["defaults"][key] = value
+        entry = self.current_entry()
+        if entry is not None:
+            profile = entry.setdefault("profile", {})
+            generation = profile.setdefault("generation", dict(self.config["defaults"]))
+            generation[key] = value
         save_config(self.config)
-        self.success(f"{key}: {value}")
+        shown = value if value is not None else ("random" if key == "seed" else "auto")
+        self.success(f"{key}: {shown}")
+
+    def retry_command(self) -> None:
+        if self.runner is None and not self.load_current_model():
+            self.error("Missing model. Use /model fetch or /model add PATH.")
+            return
+        if not self.chat:
+            self.warn("There is no chat to retry.")
+            return
+        history = self.chat.history()
+        user_index = next((i for i in range(len(history) - 1, -1, -1) if history[i].get("role") == "user"), None)
+        if user_index is None:
+            self.warn("There is no user message to retry.")
+            return
+        text = history[user_index]["content"]
+        prior_history = history[:user_index]
+        self.chat.retry()
+        self.generate_response(text, prior_history, append_user=False)
+
+    def current_model_limit(self) -> int | None:
+        if self.runner is not None:
+            return self.runner.max_context_length
+        entry = self.current_entry()
+        if not entry or not entry.get("path"):
+            return None
+        root = Path(entry["path"])
+        limit = model_context_length(info_config(root), info_config(root, "tokenizer_config.json"))
+        if limit:
+            return limit
+        try:
+            info = inspect_model(root)
+            for tensor in info.inputs:
+                if tensor.name in {"input_ids", "inputs_embeds"} and len(tensor.shape) >= 2:
+                    value = tensor.shape[1]
+                    if isinstance(value, int) and value > 1:
+                        return value
+        except Exception:
+            pass
+        return None
+
+    def doctor(self) -> None:
+        self.doctor_row(True, "Veyra", f"v{__version__} on Python {platform.python_version()}")
+        try:
+            ort_version = importlib.metadata.version("onnxruntime")
+        except importlib.metadata.PackageNotFoundError:
+            try:
+                ort_version = importlib.metadata.version("onnxruntime-directml")
+            except importlib.metadata.PackageNotFoundError:
+                try:
+                    ort_version = importlib.metadata.version("onnxruntime-openvino")
+                except importlib.metadata.PackageNotFoundError:
+                    ort_version = None
+        self.doctor_row(bool(ort_version), "ONNX Runtime", ort_version or "not installed")
+        for label, path in (("config", CONFIG_PATH.parent), ("models", MODELS_DIR), ("chats", CHATS_DIR), ("history", HISTORY_PATH.parent)):
+            self.doctor_row(path.exists() and os.access(path, os.W_OK), label, str(path))
+        device = normalize_device(self.config.get("device"))
+        self.doctor_row(device in available_devices(), "device", f"{device} ({provider_for_device(device)})")
+        name, entry = current_model_entry(self.config)
+        if not entry:
+            self.doctor_row(False, "model", "none selected")
+            return
+        try:
+            info = inspect_model(entry["path"])
+            self.doctor_row(info.tokenizer_path.exists(), "tokenizer", str(info.tokenizer_path))
+            self.doctor_row(info.supported, "ONNX graph", "supported" if info.supported else "unsupported")
+            limit = self.current_model_limit()
+            self.doctor_row(bool(limit), "context", str(limit or "missing from model metadata"), warning=not bool(limit))
+            output_budget = int(self.config.get("defaults", {}).get("max_new_tokens", 128))
+            budget_ok = not limit or output_budget < limit
+            self.doctor_row(
+                budget_ok,
+                "token budget",
+                f"{output_budget} max new / {limit or 'unknown'} context",
+            )
+            if self.runner is None:
+                OnnxCausalLMRunner(entry["path"], device=device)
+            self.doctor_row(True, "model load", str(name))
+        except Exception as exc:
+            self.doctor_row(False, "model load", str(exc))
+
+    def doctor_row(self, ok: bool, label: str, detail: str, warning: bool = False) -> None:
+        symbol = "!" if warning else ("OK" if ok else "FAIL")
+        role = "warning" if warning else ("success" if ok else "error")
+        print(self.theme.text(role, symbol.ljust(5)) + self.theme.text("label", label.ljust(14)) + self.theme.text("value", detail))
 
     def chat_command(self, args: list[str]) -> None:
         action = args[0] if args else ""
@@ -754,12 +984,45 @@ class VeyraShell:
         name = self.config.get("current_model")
         return models(self.config).get(name) if name else None
 
+    def generation_summary(self, entry: dict | None = None) -> str:
+        defaults = dict(self.config.get("defaults", {}))
+        profile = (entry or {}).get("profile", {})
+        if isinstance(profile, dict) and isinstance(profile.get("generation"), dict):
+            defaults.update(profile["generation"])
+        seed = defaults.get("seed")
+        context = defaults.get("context_length")
+        return (
+            f"tokens={defaults.get('max_new_tokens')} temp={defaults.get('temperature')} "
+            f"top-k={defaults.get('top_k')} top-p={defaults.get('top_p')} "
+            f"repeat={defaults.get('repetition_penalty')} seed={seed if seed is not None else 'random'} "
+            f"context={context if context is not None else 'auto'}"
+        )
+
     def apply_model_profile(self, entry: dict) -> None:
         profile = entry.get("profile") if isinstance(entry.get("profile"), dict) else {}
         if profile.get("assistant_name"):
             self.config["assistant_name"] = profile["assistant_name"]
         if profile.get("mode"):
             self.config["current_mode"] = normalize_mode(profile["mode"])
+        generation = profile.get("generation")
+        if isinstance(generation, dict):
+            for key in self.config["defaults"]:
+                if key in generation:
+                    self.config["defaults"][key] = generation[key]
+        else:
+            profile["generation"] = dict(self.config.get("defaults", {}))
+            entry["profile"] = profile
+        limit = self.runner.max_context_length if self.runner else None
+        context = self.config["defaults"].get("context_length")
+        if limit and context and context > limit:
+            self.config["defaults"]["context_length"] = None
+            profile["generation"]["context_length"] = None
+        output_budget = int(self.config["defaults"].get("max_new_tokens", 128))
+        if limit and output_budget >= limit:
+            safe_budget = min(128, max(1, limit - 1))
+            self.config["defaults"]["max_new_tokens"] = safe_budget
+            profile["generation"]["max_new_tokens"] = safe_budget
+        save_config(self.config)
 
     def double_tab_stop_requested(self) -> bool:
         if not sys.stdin.isatty():

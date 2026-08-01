@@ -703,7 +703,7 @@ wheels = [
 
 [[package]]
 name = "veyra"
-version = "2026.7.31.2"
+version = "2026.8.1"
 source = { editable = "." }
 dependencies = [
     { name = "huggingface-hub" },

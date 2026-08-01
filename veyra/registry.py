@@ -45,6 +45,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "top_k": 40,
         "top_p": 1.0,
         "repetition_penalty": 1.0,
+        "seed": None,
+        "context_length": None,
     },
     "models": {},
 }
@@ -125,6 +127,9 @@ def current_model_entry(config: dict[str, Any]) -> tuple[str | None, dict[str, A
 
 
 def register_model(config: dict[str, Any], name: str, entry: dict[str, Any], select: bool = True) -> None:
+    profile = entry.setdefault("profile", {})
+    if isinstance(profile, dict):
+        profile.setdefault("generation", dict(config.get("defaults", DEFAULT_CONFIG["defaults"])))
     models(config)[name] = entry
     if select:
         config["current_model"] = name

@@ -7,7 +7,7 @@
 From this checkout:
 
 ```bash
-uv tool install
+uv tool install .
 ```
 
 From GitHub:
@@ -29,6 +29,7 @@ uv run veyra
 ```bash
 veyra
 veyra fetch
+veyra fetch owner/model
 veyra run "Hello"
 veyra add ./models/foo
 veyra add C:\Users\Jack\Models
@@ -45,24 +46,29 @@ Inside the shell:
 /model use NAME
 /model add PATH
 /model test
+/model info
 /model remove NAME
 /mode qwen
 /profile name Nova
 /device list
 /device help openvino
 /stats on
+/seed 42
+/context auto
+/retry
+/doctor
 /theme rainbow
 /chat list
 /chat export markdown
 ```
 
-`/model add PATH` can point at one model directory or a folder containing multiple model directories. `/model test` runs a one-token smoke test and reports load time, first-token time, total time, and the sampled token.
+`/model add PATH` can point at one model directory or a folder containing multiple model directories. `/model test` runs a one-token smoke test and reports load time, first-token time, total time, and the sampled token. `/model info` shows architecture, ONNX file, context limit, cache support, and profile metadata.
 
 During generation, Ctrl+C stops generation. On Windows terminals, double-tapping Tab also requests a stop between generated tokens.
 
 ## Fetching Models
 
-`veyra fetch` and `/model fetch` list compatible private or public repositories from the `veyra-ai` Hugging Face organization. If a repository contains several exports under `onnx/`, Veyra asks which variant to install and recommends Int8 when available. Only the selected model variant, any required companion ONNX files, and tokenizer/config metadata are downloaded.
+`veyra fetch` and `/model fetch` list compatible private or public repositories from the `veyra-ai` Hugging Face organization. You can also fetch any compatible Hub repository directly with `veyra fetch owner/model` or `/model fetch owner/model`. If a repository contains several exports under `onnx/`, Veyra asks which variant to install and recommends Int8 when available. Only the selected model variant, any required companion ONNX files, and tokenizer/config metadata are downloaded.
 
 Sign in before fetching private models:
 
@@ -70,7 +76,7 @@ Sign in before fetching private models:
 hf auth login
 ```
 
-Compatible ONNX repositories must include `tokenizer.json` alongside their model configuration.
+Compatible ONNX repositories must include at least one `.onnx` file and a root-level `tokenizer.json`. Veyra reports a clear error instead of guessing or borrowing a tokenizer from another model.
 
 ## Shell Commands
 
@@ -79,6 +85,8 @@ Core:
 ```text
 /help
 /status
+/doctor
+/retry
 /exit
 /quit
 /clear
@@ -90,12 +98,13 @@ Models:
 /model
 /model list
 /model use NAME
-/model fetch
+/model fetch [REPO_ID]
 /model refresh
 /model update
 /model update all
 /model add PATH
 /model inspect
+/model info [NAME]
 /model test [NAME]
 /model remove NAME
 ```
@@ -110,6 +119,8 @@ Prompting and generation:
 /topk N
 /topp VALUE
 /repetition VALUE
+/seed N|random
+/context N|auto
 /stats on|off
 ```
 
@@ -161,8 +172,21 @@ Each registered model can carry a small profile:
 
 - prompt mode
 - assistant display name
+- generation settings, including the token budget, sampling values, seed, and context length
 
-Use `/profile name NAME` to change the assistant label from `Veyra ›` to something else for the active model. Use `/profile mode MODE` to persist a preferred prompt mode for that model.
+Use `/profile name NAME` to change the assistant label from `Veyra ›` to something else for the active model. Use `/profile mode MODE` to persist a preferred prompt mode for that model. Changes made with `/tokens`, `/temp`, `/topk`, `/topp`, `/repetition`, `/seed`, and `/context` are restored whenever that model is selected again.
+
+## Context Windows
+
+Veyra reads the model context limit from `config.json`, tokenizer metadata, or a static ONNX sequence dimension. `/context auto` uses that maximum; `/context N` sets a smaller working window and rejects values above the model limit. If no limit is declared, Veyra will not accept a custom value it cannot validate and `/doctor` reports the missing metadata.
+
+In conversational modes, Veyra uses a sliding history window. When the formatted conversation plus the output token budget would exceed the selected context, the oldest complete turns are dropped while the newest user message is preserved. If the current message itself cannot fit, generation stops with a clear error. Base mode has no chat history to slide.
+
+Use `/seed N` for repeatable sampling or `/seed random` for nondeterministic generation. `/retry` replaces the most recent assistant response in the effective chat history and regenerates the last user turn.
+
+## Diagnostics
+
+`/doctor` checks the CLI and Python versions, writable data directories, ONNX Runtime provider, tokenizer, graph support, model metadata, and model session initialization. It does not run a benchmark or generate tokens.
 
 ## Devices
 
@@ -230,7 +254,7 @@ pipx install git+https://github.com/Jdudeo5972/veyra-cli.git
 
 ## Versioning
 
-Veyra uses calendar versions in `YEAR.MONTH.DAY` format, displayed and tagged with a leading `v`, such as `v2026.7.31`. Additional releases on the same day append a counter, such as `v2026.7.31.1`.
+Veyra uses calendar versions in `YEAR.MONTH.DAY` format, displayed and tagged with a leading `v`, such as `v2026.8.1`. Additional releases on the same day append a counter, such as `v2026.8.1.1`.
 
 ## License
 

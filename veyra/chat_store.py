@@ -65,11 +65,17 @@ class ChatStore:
         return rows
 
     def history(self) -> list[dict[str, str]]:
-        return [
-            {"role": e["role"], "content": e["content"]}
-            for e in self.events()
-            if e.get("type") == "message" and e.get("role") in {"user", "assistant"}
-        ]
+        history: list[dict[str, str]] = []
+        for event in self.events():
+            if event.get("type") == "event" and event.get("name") == "retry":
+                if history and history[-1].get("role") == "assistant":
+                    history.pop()
+            elif event.get("type") == "message" and event.get("role") in {"user", "assistant"}:
+                history.append({"role": event["role"], "content": event["content"]})
+        return history
+
+    def retry(self) -> None:
+        self.append({"type": "event", "name": "retry"})
 
     def rename(self, name: str) -> Path:
         target = self.path.with_name(f"{safe_model_name(name)}.jsonl")
@@ -80,9 +86,8 @@ class ChatStore:
     def export_markdown(self) -> Path:
         out = self.path.with_suffix(".md")
         lines = ["# Veyra Chat", ""]
-        for event in self.events():
-            if event.get("type") == "message":
-                role = event.get("role", "message").title()
-                lines.extend([f"## {role}", "", event.get("content", ""), ""])
+        for message in self.history():
+            role = message.get("role", "message").title()
+            lines.extend([f"## {role}", "", message.get("content", ""), ""])
         out.write_text("\n".join(lines), encoding="utf-8")
         return out

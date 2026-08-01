@@ -49,6 +49,37 @@ def list_veyra_models() -> list[dict[str, Any]]:
     return choices
 
 
+def get_hf_model(repo_id: str, revision: str = "main") -> dict[str, Any]:
+    try:
+        from huggingface_hub import list_repo_files
+    except ImportError as exc:
+        raise RuntimeError("huggingface_hub is required for fetching models.") from exc
+
+    repo_id = normalize_repo_id(repo_id)
+    try:
+        files = list_repo_files(repo_id, revision=revision)
+    except Exception as exc:
+        raise RuntimeError(f"Could not access Hugging Face model {repo_id}: {exc}") from exc
+    if "tokenizer.json" not in files:
+        raise RuntimeError(
+            f"{repo_id} does not contain tokenizer.json. Veyra requires a fast tokenizer.json beside the ONNX export."
+        )
+    variants = onnx_variants(files)
+    if not variants:
+        raise RuntimeError(f"No ONNX files found in {repo_id}.")
+    return {"repo_id": repo_id, "files": files, "onnx_files": variants, "downloads": None}
+
+
+def normalize_repo_id(value: str) -> str:
+    value = value.strip().rstrip("/")
+    prefix = "https://huggingface.co/"
+    if value.startswith(prefix):
+        value = value[len(prefix) :]
+    if value.count("/") != 1:
+        raise RuntimeError("Use a Hugging Face model ID such as owner/model or its huggingface.co URL.")
+    return value
+
+
 def download_model(
     repo_id: str,
     revision: str = "main",

@@ -49,7 +49,9 @@ class OnnxCausalLMRunner:
             raise FileNotFoundError(f"Missing tokenizer.json in {self.model_dir}")
         self.config = self._read_json("config.json")
         self.generation_config = self._read_json("generation_config.json")
+        self.tokenizer_config = self._read_json("tokenizer_config.json")
         self.tokenizer = Tokenizer.from_file(str(self.tokenizer_path))
+        self.max_context_length = model_context_length(self.config, self.tokenizer_config)
         self.eos_ids = self._eos_ids()
         self.embed_session = None
 
@@ -90,6 +92,8 @@ class OnnxCausalLMRunner:
         self.inputs = self.session.get_inputs()
         self.outputs = self.session.get_outputs()
         self.input_by_name = {i.name: i for i in self.inputs}
+        if self.max_context_length is None:
+            self.max_context_length = _onnx_context_length(self.input_by_name)
         self.output_names = [o.name for o in self.outputs]
         self.past_inputs = self._past_inputs()
         self.state_inputs = self._state_inputs()
@@ -118,11 +122,23 @@ class OnnxCausalLMRunner:
         top_k: int = 40,
         top_p: float = 1.0,
         repetition_penalty: float = 1.0,
+        seed: int | None = None,
+        context_length: int | None = None,
     ) -> Iterator[str]:
         ids = self.tokenizer.encode(prompt, add_special_tokens=False).ids
         if not ids:
             ids = [self._bos_id()]
+        limit = int(context_length) if context_length is not None else self.max_context_length
+        if self.max_context_length and limit and limit > self.max_context_length:
+            raise ValueError(
+                f"Context length {limit} exceeds this model's limit of {self.max_context_length}."
+            )
+        if limit and len(ids) + max(0, int(max_new_tokens)) > limit:
+            raise ValueError(
+                f"Prompt ({len(ids)} tokens) plus output budget ({max_new_tokens}) exceeds context length {limit}."
+            )
         generated: list[int] = []
+        rng = np.random.default_rng(seed)
         previous_text = self.tokenizer.decode(ids, skip_special_tokens=False)
         cache = self._empty_cache() if self.uses_cache else {}
         state_cache = self._empty_state_cache()
@@ -149,6 +165,7 @@ class OnnxCausalLMRunner:
                 top_k=int(top_k),
                 top_p=float(top_p),
                 repetition_penalty=float(repetition_penalty),
+                rng=rng,
             )
             if next_id in self.eos_ids:
                 break
@@ -341,6 +358,9 @@ class OnnxCausalLMRunner:
         value = self.config.get("bos_token_id")
         return int(value) if isinstance(value, int) else 0
 
+    def token_count(self, text: str) -> int:
+        return len(self.tokenizer.encode(text, add_special_tokens=False).ids)
+
 
 def sample_next_token(
     logits: np.ndarray,
@@ -349,6 +369,7 @@ def sample_next_token(
     top_k: int,
     top_p: float,
     repetition_penalty: float,
+    rng: np.random.Generator | None = None,
 ) -> int:
     if repetition_penalty and repetition_penalty != 1.0:
         for token_id in set(generated):
@@ -378,7 +399,8 @@ def sample_next_token(
         probs = np.where(mask, probs, 0.0)
         probs = probs / probs.sum()
 
-    return int(np.random.choice(np.arange(probs.shape[0]), p=probs))
+    generator = rng or np.random.default_rng()
+    return int(generator.choice(np.arange(probs.shape[0]), p=probs))
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -412,6 +434,32 @@ def _config_value(config: dict[str, Any], field: str) -> Any:
         heads = _config_value(config, "num_attention_heads")
         if isinstance(hidden, int) and isinstance(heads, int) and heads:
             return hidden // heads
+    return None
+
+
+def model_context_length(config: dict[str, Any], tokenizer_config: dict[str, Any] | None = None) -> int | None:
+    for field in (
+        "max_position_embeddings",
+        "max_sequence_length",
+        "max_seq_len",
+        "n_positions",
+        "seq_length",
+        "sliding_window",
+    ):
+        value = _config_value(config, field)
+        if isinstance(value, int) and 1 < value < 100_000_000:
+            return value
+    value = (tokenizer_config or {}).get("model_max_length")
+    if isinstance(value, int) and 1 < value < 100_000_000:
+        return value
+    return None
+
+
+def _onnx_context_length(inputs: dict[str, Any]) -> int | None:
+    for name in ("input_ids", "inputs_embeds"):
+        shape = list(getattr(inputs.get(name), "shape", []) or [])
+        if len(shape) >= 2 and isinstance(shape[1], int) and shape[1] > 1:
+            return shape[1]
     return None
 
 
