@@ -182,6 +182,11 @@ class VeyraShell:
 
     def banner_rows(self, state: str) -> list[tuple[list[tuple[str, str]], list[tuple[str, str]]]]:
         defaults = self.config.get("defaults", {})
+        configured_context = defaults.get("context_length")
+        effective_context = configured_context or self.current_model_limit()
+        context_text = str(effective_context or "unknown")
+        if configured_context is None and effective_context:
+            context_text += "(auto)"
         autoload = "on" if self.config.get("autoload", True) else "off"
         status_role = {
             "ready": "status_ready",
@@ -198,8 +203,8 @@ class VeyraShell:
             [[("muted", f"    autoload: {autoload}")], [("label", "  Mode:  "), ("value", mode)]],
             [[], []],
             [[("muted", "    Using local ONNX engine")], [("label", "  Generation Settings")]],
-            [[("muted", "    Type /help for commands")], [("value", f"  tokens: {defaults.get('max_new_tokens', 128)}   temp: {defaults.get('temperature', 0.8)}   top-k: {defaults.get('top_k', 40)}")]],
-            [[], [("value", f"  repeat: {defaults.get('repetition_penalty', 1.0)}   top-p: {defaults.get('top_p', 1.0)}")]],
+            [[("muted", "    Type /help for commands")], [("value", f"  output:{defaults.get('max_new_tokens', 128)} temp:{defaults.get('temperature', 0.8)} top-k:{defaults.get('top_k', 40)}")]],
+            [[], [("value", f"  context:{context_text} repeat:{defaults.get('repetition_penalty', 1.0)} top-p:{defaults.get('top_p', 1.0)}")]],
         ]
 
     def chat_names(self) -> list[str]:
@@ -431,8 +436,13 @@ class VeyraShell:
             ("context", "context_length"),
         ):
             value = defaults.get(key)
-            empty = "random" if key == "seed" else "auto"
-            print(self.theme.text("label", label.ljust(9)) + self.theme.text("value", str(value if value is not None else empty)))
+            if key == "seed" and value is None:
+                shown = "random"
+            elif key == "context_length" and value is None:
+                shown = f"auto ({self.current_model_limit() or 'unknown'})"
+            else:
+                shown = str(value)
+            print(self.theme.text("label", label.ljust(9)) + self.theme.text("value", shown))
 
     def device_command(self, args: list[str]) -> None:
         current = normalize_device(self.config.get("device"))
@@ -728,9 +738,7 @@ class VeyraShell:
             self.error(f"Unknown model: {target}")
             return
         root = Path(entry["path"])
-        config = info_config(root)
-        tokenizer_config = info_config(root, "tokenizer_config.json")
-        limit = model_context_length(config, tokenizer_config)
+        limit = self.model_limit_for_entry(entry)
         try:
             info = inspect_model(root)
             onnx = info.onnx_path.relative_to(root)
@@ -842,7 +850,12 @@ class VeyraShell:
             generation = profile.setdefault("generation", dict(self.config["defaults"]))
             generation[key] = value
         save_config(self.config)
-        shown = value if value is not None else ("random" if key == "seed" else "auto")
+        if value is not None:
+            shown = value
+        elif key == "seed":
+            shown = "random"
+        else:
+            shown = f"auto ({self.current_model_limit() or 'unknown'})"
         self.success(f"{key}: {shown}")
 
     def retry_command(self) -> None:
@@ -866,6 +879,9 @@ class VeyraShell:
         if self.runner is not None:
             return self.runner.max_context_length
         entry = self.current_entry()
+        return self.model_limit_for_entry(entry)
+
+    def model_limit_for_entry(self, entry: dict | None) -> int | None:
         if not entry or not entry.get("path"):
             return None
         root = Path(entry["path"])
@@ -991,11 +1007,13 @@ class VeyraShell:
             defaults.update(profile["generation"])
         seed = defaults.get("seed")
         context = defaults.get("context_length")
+        limit = self.model_limit_for_entry(entry) if entry else self.current_model_limit()
+        context_text = str(context) if context is not None else f"auto ({limit or 'unknown'})"
         return (
             f"tokens={defaults.get('max_new_tokens')} temp={defaults.get('temperature')} "
             f"top-k={defaults.get('top_k')} top-p={defaults.get('top_p')} "
             f"repeat={defaults.get('repetition_penalty')} seed={seed if seed is not None else 'random'} "
-            f"context={context if context is not None else 'auto'}"
+            f"context={context_text}"
         )
 
     def apply_model_profile(self, entry: dict) -> None:
