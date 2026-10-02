@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "veyra"
-version = "2026.8.01"
-description = "Lightweight CLI for local ONNX causal language models."
+version = "2026.10.02"
+description = "Lightweight CLI for local ONNX and Transformers causal language models."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -16,6 +16,13 @@ dependencies = [
   "huggingface_hub",
   "numpy",
   "prompt_toolkit",
+]
+
+[project.optional-dependencies]
+transformers = [
+  "transformers>=4.45",
+  "torch",
+  "safetensors",
 ]
 
 [project.urls]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 CHATML_END = "<|im_end|>"
-PROMPT_MODES = ("base", "chatml", "qwen", "gemma", "mistral", "llama3")
+PROMPT_MODES = ("base", "template", "chatml", "qwen", "gemma", "mistral", "llama3")
 
 
 def format_prompt(
@@ -12,6 +12,8 @@ def format_prompt(
     system_prompt: str | None = None,
 ) -> str:
     mode = normalize_mode(mode)
+    if mode == "template":
+        raise RuntimeError("The selected model's tokenizer chat template must be rendered by its runtime.")
     if mode == "base":
         return user_text
     if mode == "gemma":
@@ -96,6 +98,8 @@ def normalize_mode(mode: str | None) -> str:
 def infer_prompt_mode(config: dict | None = None, tokenizer_config: dict | None = None) -> str:
     config = config or {}
     tokenizer_config = tokenizer_config or {}
+    if tokenizer_config.get("chat_template"):
+        return "template"
     haystack = " ".join(
         str(x).lower()
         for x in [

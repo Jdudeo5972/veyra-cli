@@ -8,6 +8,7 @@ import numpy as np
 from tokenizers import Tokenizer
 
 from .inspect import SUPPORTED_INPUTS, find_onnx_file, is_past_input, missing_cache_fields, parse_cache_name
+from .prompts import format_prompt
 
 
 DEVICE_PROVIDERS = {
@@ -51,6 +52,7 @@ class OnnxCausalLMRunner:
         self.generation_config = self._read_json("generation_config.json")
         self.tokenizer_config = self._read_json("tokenizer_config.json")
         self.tokenizer = Tokenizer.from_file(str(self.tokenizer_path))
+        self.template_tokenizer = None
         self.max_context_length = model_context_length(self.config, self.tokenizer_config)
         self.eos_ids = self._eos_ids()
         self.embed_session = None
@@ -361,6 +363,45 @@ class OnnxCausalLMRunner:
     def token_count(self, text: str) -> int:
         return len(self.tokenizer.encode(text, add_special_tokens=False).ids)
 
+    def format_conversation(
+        self,
+        user_text: str,
+        mode: str,
+        history: list[dict[str, str]],
+        system_prompt: str | None = None,
+    ) -> str:
+        if mode == "template":
+            try:
+                from transformers import AutoTokenizer
+            except ImportError as exc:
+                raise RuntimeError(
+                    "This ONNX model uses a custom tokenizer chat template. Install template support with "
+                    "`uv tool install 'veyra[transformers]'`."
+                ) from exc
+            if self.template_tokenizer is None:
+                self.template_tokenizer = AutoTokenizer.from_pretrained(
+                    self.model_dir,
+                    local_files_only=True,
+                    trust_remote_code=False,
+                )
+                template_path = self.model_dir / "chat_template.jinja"
+                if template_path.exists():
+                    self.template_tokenizer.chat_template = template_path.read_text(encoding="utf-8")
+            tokenizer = self.template_tokenizer
+            if not getattr(tokenizer, "chat_template", None):
+                raise RuntimeError("Prompt mode is template, but this tokenizer does not provide a chat template.")
+            messages: list[dict[str, str]] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.extend(
+                {"role": item["role"], "content": item.get("content", "")}
+                for item in history
+                if item.get("role") in {"user", "assistant"}
+            )
+            messages.append({"role": "user", "content": user_text})
+            return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        return format_prompt(user_text, mode, history=history, system_prompt=system_prompt)
+
 
 def sample_next_token(
     logits: np.ndarray,
@@ -522,3 +563,16 @@ def device_install_hint(name: str | None) -> str:
             "OpenVINO and DirectML ONNX Runtime wheels replace one another in a Python environment."
         )
     return ""
+
+
+def create_runner(entry: dict[str, Any], device: str = "cpu"):
+    runtime = str(entry.get("runtime", "onnx")).lower()
+    if runtime == "transformers":
+        from .transformers_runner import TransformersCausalLMRunner
+
+        return TransformersCausalLMRunner(
+            entry["path"],
+            device=device,
+            trust_remote_code=bool(entry.get("trust_remote_code", False)),
+        )
+    return OnnxCausalLMRunner(entry["path"], device=device)

@@ -1,6 +1,6 @@
 # Veyra
 
-`veyra` is a lightweight Python CLI for running local ONNX causal language models. It opens a polished REPL with slash commands, history, autocomplete, autosuggestions, and streaming output.
+`veyra` is a lightweight Python CLI for running local ONNX and Transformers causal language models. It opens a polished REPL with slash commands, history, autocomplete, autosuggestions, and streaming output.
 
 ## Install
 
@@ -10,11 +10,23 @@ From this checkout:
 uv tool install .
 ```
 
+ONNX Runtime remains the lightweight default. Install the optional Transformers/PyTorch runtime when you want to run Safetensors models:
+
+```bash
+uv tool install '.[transformers]'
+```
+
 From GitHub:
 
 ```bash
 uv tool install git+https://github.com/Jdudeo5972/veyra-cli.git
 pipx install git+https://github.com/Jdudeo5972/veyra-cli.git
+```
+
+To install the Transformers runtime directly from GitHub:
+
+```bash
+uv tool install "veyra[transformers] @ git+https://github.com/Jdudeo5972/veyra-cli.git"
 ```
 
 ## Development
@@ -62,13 +74,15 @@ Inside the shell:
 /chat export markdown
 ```
 
-`/model add PATH` can point at one model directory or a folder containing multiple model directories. `/model test` runs a one-token smoke test and reports load time, first-token time, total time, and the sampled token. `/model info` shows architecture, ONNX file, context limit, cache support, and profile metadata.
+`/model add PATH` can point at one model directory or a folder containing multiple model directories. Mixed local folders default to ONNX; use `/model add PATH transformers` or `veyra add PATH --runtime transformers` to select Safetensors. `/model test` runs a one-token smoke test and reports load time, first-token time, total time, and the sampled token. `/model info` shows architecture, runtime, weights, context limit, cache support, and profile metadata.
 
 During generation, Ctrl+C stops generation. On Windows terminals, double-tapping Tab also requests a stop between generated tokens.
 
 ## Fetching Models
 
-`veyra fetch` and `/model fetch` list compatible private or public repositories from the `veyra-ai` Hugging Face organization. You can also fetch any compatible Hub repository directly with `veyra fetch owner/model` or `/model fetch owner/model`. If a repository contains several exports under `onnx/`, Veyra asks which variant to install and recommends Int8 when available. Only the selected model variant, any required companion ONNX files, and tokenizer/config metadata are downloaded.
+`veyra fetch` and `/model fetch` list compatible private or public repositories from the `veyra-ai` Hugging Face organization. You can also fetch any compatible Hub repository directly with `veyra fetch owner/model` or `/model fetch owner/model`.
+
+Repositories may contain root-level Safetensors weights and ONNX exports in `onnx/`. Veyra shows both runtime choices, recommends a lightweight ONNX variant by default when one exists, and downloads only the selected weight format plus tokenizer/config metadata.
 
 Sign in before fetching private models:
 
@@ -76,7 +90,7 @@ Sign in before fetching private models:
 hf auth login
 ```
 
-Compatible ONNX repositories must include at least one `.onnx` file and a root-level `tokenizer.json`. Veyra reports a clear error instead of guessing or borrowing a tokenizer from another model.
+Compatible repositories must include a root-level `tokenizer.json` and either an `.onnx` or `.safetensors` model. Veyra reports a clear error instead of guessing or borrowing a tokenizer from another model.
 
 ## Shell Commands
 
@@ -102,7 +116,7 @@ Models:
 /model refresh
 /model update
 /model update all
-/model add PATH
+/model add PATH [onnx|transformers]
 /model inspect
 /model info [NAME]
 /model test [NAME]
@@ -112,7 +126,7 @@ Models:
 Prompting and generation:
 
 ```text
-/mode base|chatml|qwen|gemma|mistral|llama3
+/mode base|template|chatml|qwen|gemma|mistral|llama3
 /system TEXT
 /temp VALUE
 /tokens N
@@ -154,6 +168,8 @@ Chats:
 
 Base mode sends the user text directly to the model as a raw completion prompt.
 
+Template mode uses the model tokenizer's own chat template through Transformers. Veyra detects both `chat_template.jinja` and templates embedded in `tokenizer_config.json`; new Veyra instruct models select this mode automatically.
+
 ChatML and Qwen modes format prompts like:
 
 ```text
@@ -164,7 +180,7 @@ Hello<|im_end|>
 
 Gemma mode follows the Gemma tokenizer template, using `<bos>`, `<start_of_turn>user`, `<start_of_turn>model`, and `<end_of_turn>`. Mistral mode uses `[INST] ... [/INST]`. Llama 3 mode uses the `<|start_header_id|>` chat header format.
 
-When possible, Veyra infers the prompt mode from `config.json` and `tokenizer_config.json` when adding a model.
+When possible, Veyra infers the prompt mode from `config.json`, `tokenizer_config.json`, and `chat_template.jinja` when adding a model.
 
 ## Model Profiles
 
@@ -186,11 +202,13 @@ Use `/seed N` for repeatable sampling or `/seed random` for nondeterministic gen
 
 ## Diagnostics
 
-`/doctor` checks the CLI and Python versions, writable data directories, ONNX Runtime provider, tokenizer, graph support, model metadata, and model session initialization. It does not run a benchmark or generate tokens.
+`/doctor` checks the CLI and Python versions, writable data directories, installed runtimes, tokenizer, model weights or graph support, model metadata, and model session initialization. It does not run a benchmark or generate tokens.
 
 ## Devices
 
 Veyra defaults to CPU. Use `/device list` to see ONNX Runtime execution providers available in your current Python environment.
+
+The Transformers runtime currently uses CPU mode. DirectML and OpenVINO selections apply to ONNX models.
 
 Common providers:
 
@@ -231,7 +249,7 @@ Prompt history is stored at `~/.local/state/veyra/history.txt`.
 
 ## Model Architecture
 
-Veyra treats architecture as metadata and uses ONNX graph inputs and outputs as the source of truth wherever possible.
+Veyra treats architecture as metadata. ONNX models use graph inputs and outputs as the source of truth wherever possible; Transformers models use `AutoModelForCausalLM`, the model config, native KV caching, and the tokenizer's chat template.
 
 Currently tested support includes:
 
@@ -240,6 +258,8 @@ Currently tested support includes:
 - Qwen2/Qwen2.5/Qwen3-style cached exports
 - split Qwen3.5/Next-style exports using `inputs_embeds`, `embed_tokens.onnx`, and recurrent/conv cache state
 - SmolLM2-style cached exports
+- Safetensors causal language models supported by Transformers `AutoModelForCausalLM`
+- standalone `chat_template.jinja` files used by Veyra instruct models
 
 Unsupported required inputs are reported clearly by `veyra inspect PATH`.
 
@@ -254,7 +274,7 @@ pipx install git+https://github.com/Jdudeo5972/veyra-cli.git
 
 ## Versioning
 
-Veyra uses calendar versions in `YEAR.MONTH.DD` format, displayed and tagged with a leading `v`, such as `v2026.8.01`. Additional releases on the same day append a counter, such as `v2026.8.01.1`.
+Veyra uses calendar versions in `YEAR.MONTH.DD` format, displayed and tagged with a leading `v`, such as `v2026.10.02`. Additional releases on the same day append a counter, such as `v2026.10.02.1`.
 
 ## License
 

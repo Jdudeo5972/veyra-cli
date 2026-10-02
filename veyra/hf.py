@@ -16,7 +16,9 @@ MODEL_METADATA_PATTERNS = [
     "chat_template.jinja",
     "config.json",
     "generation_config.json",
+    "*.py",
 ]
+TRANSFORMERS_WEIGHT_PATTERNS = ["*.safetensors", "*.safetensors.index.json"]
 
 
 def list_veyra_models() -> list[dict[str, Any]]:
@@ -35,13 +37,15 @@ def list_veyra_models() -> list[dict[str, Any]]:
         except Exception:
             continue
         onnx_files = onnx_variants(files)
-        if not onnx_files or "tokenizer.json" not in files:
+        has_transformers = has_safetensors(files)
+        if (not onnx_files and not has_transformers) or "tokenizer.json" not in files:
             continue
         choices.append(
             {
                 "repo_id": repo_id,
                 "files": files,
                 "onnx_files": onnx_files,
+                "has_transformers": has_transformers,
                 "downloads": getattr(repo, "downloads", None),
             }
         )
@@ -62,12 +66,19 @@ def get_hf_model(repo_id: str, revision: str = "main") -> dict[str, Any]:
         raise RuntimeError(f"Could not access Hugging Face model {repo_id}: {exc}") from exc
     if "tokenizer.json" not in files:
         raise RuntimeError(
-            f"{repo_id} does not contain tokenizer.json. Veyra requires a fast tokenizer.json beside the ONNX export."
+            f"{repo_id} does not contain tokenizer.json. Veyra requires a fast tokenizer.json beside the model weights."
         )
     variants = onnx_variants(files)
-    if not variants:
-        raise RuntimeError(f"No ONNX files found in {repo_id}.")
-    return {"repo_id": repo_id, "files": files, "onnx_files": variants, "downloads": None}
+    transformers = has_safetensors(files)
+    if not variants and not transformers:
+        raise RuntimeError(f"No ONNX or Safetensors model files found in {repo_id}.")
+    return {
+        "repo_id": repo_id,
+        "files": files,
+        "onnx_files": variants,
+        "has_transformers": transformers,
+        "downloads": None,
+    }
 
 
 def normalize_repo_id(value: str) -> str:
@@ -84,6 +95,7 @@ def download_model(
     repo_id: str,
     revision: str = "main",
     onnx_file: str | None = None,
+    runtime: str = "onnx",
 ) -> tuple[Path, str | None]:
     try:
         from huggingface_hub import HfApi, list_repo_files, snapshot_download
@@ -91,24 +103,31 @@ def download_model(
         raise RuntimeError("huggingface_hub is required for fetching models.") from exc
 
     files = list_repo_files(repo_id, revision=revision)
-    available_onnx = onnx_variants(files)
-    if not available_onnx:
-        raise RuntimeError(f"No ONNX files found in {repo_id}.")
-    if onnx_file is None:
-        onnx_file = recommended_onnx_file(available_onnx)
-    if onnx_file not in available_onnx:
-        raise RuntimeError(f"ONNX file '{onnx_file}' was not found in {repo_id}.")
     if "tokenizer.json" not in files:
         raise RuntimeError(f"{repo_id} does not contain tokenizer.json.")
+    available_onnx = onnx_variants(files)
+    runtime = runtime.lower()
+    if runtime == "transformers":
+        if not has_safetensors(files):
+            raise RuntimeError(f"No Safetensors model files found in {repo_id}.")
+        onnx_file = None
+        allow_patterns = [*TRANSFORMERS_WEIGHT_PATTERNS, *MODEL_METADATA_PATTERNS]
+    else:
+        if not available_onnx:
+            raise RuntimeError(f"No ONNX files found in {repo_id}.")
+        if onnx_file is None:
+            onnx_file = recommended_onnx_file(available_onnx)
+        if onnx_file not in available_onnx:
+            raise RuntimeError(f"ONNX file '{onnx_file}' was not found in {repo_id}.")
+        allow_patterns = [*_onnx_download_files(files, onnx_file, available_onnx), *MODEL_METADATA_PATTERNS]
 
-    name = fetched_model_name(repo_id, onnx_file, len(available_onnx))
+    name = fetched_model_name(repo_id, onnx_file, len(available_onnx), runtime=runtime)
     target = MODELS_DIR / name
-    download_files = _onnx_download_files(files, onnx_file, available_onnx)
     path = snapshot_download(
         repo_id=repo_id,
         revision=revision,
         local_dir=target,
-        allow_patterns=[*download_files, *MODEL_METADATA_PATTERNS],
+        allow_patterns=allow_patterns,
     )
     commit = None
     try:
@@ -125,24 +144,33 @@ def registry_entry(
     revision: str = "main",
     commit: str | None = None,
     onnx_file: str | None = None,
+    runtime: str = "onnx",
 ) -> dict[str, Any]:
-    info = inspect_model(path)
-    model_type = info.model_type or (info.architecture or "unknown").lower()
-    config = _read_json(Path(path) / "config.json")
-    tokenizer_config = _read_json(Path(path) / "tokenizer_config.json")
-    mode = infer_prompt_mode(config, tokenizer_config)
+    root = Path(path)
+    config = _read_json(root / "config.json")
+    tokenizer_config = _read_json(root / "tokenizer_config.json")
+    has_template = (root / "chat_template.jinja").exists() or bool(tokenizer_config.get("chat_template"))
+    mode = "template" if has_template else infer_prompt_mode(config, tokenizer_config)
+    architectures = config.get("architectures") or []
+    model_type = config.get("model_type") or (architectures[0] if architectures else "unknown")
+    selected_onnx = None
+    if runtime == "onnx":
+        info = inspect_model(path)
+        model_type = info.model_type or (info.architecture or model_type)
+        selected_onnx = onnx_file or info.onnx_path.relative_to(root).as_posix()
     return {
         "source": "huggingface",
         "repo_id": repo_id,
         "revision": revision,
         "downloaded_commit": commit,
-        "onnx_file": onnx_file or info.onnx_path.relative_to(Path(path)).as_posix(),
-        "path": str(Path(path).expanduser().resolve()),
-        "runtime": "onnx",
-        "architecture": model_type,
+        "onnx_file": selected_onnx,
+        "path": str(root.expanduser().resolve()),
+        "runtime": runtime,
+        "trust_remote_code": repo_id.lower().startswith(f"{HF_ORG}/"),
+        "architecture": str(model_type).lower(),
         "mode": mode,
         "profile": {"mode": mode, "assistant_name": "Veyra"},
-        "quantized": _is_quantized(onnx_file or info.onnx_path.name),
+        "quantized": _is_quantized(selected_onnx or ""),
     }
 
 
@@ -161,6 +189,10 @@ def onnx_variants(files: list[str]) -> list[str]:
     return model_files or onnx_files
 
 
+def has_safetensors(files: list[str]) -> bool:
+    return any(path.lower().endswith(".safetensors") for path in files)
+
+
 def variant_name(onnx_file: str) -> str:
     stem = PurePosixPath(onnx_file).stem
     if stem.casefold() == "model":
@@ -170,12 +202,20 @@ def variant_name(onnx_file: str) -> str:
     return stem
 
 
-def fetched_model_name(repo_id: str, onnx_file: str, variant_count: int = 2) -> str:
+def fetched_model_name(
+    repo_id: str,
+    onnx_file: str | None,
+    variant_count: int = 2,
+    runtime: str = "onnx",
+) -> str:
     base = safe_model_name(repo_id)
-    variant = variant_name(onnx_file)
-    if variant_count <= 1 or variant == "default":
+    if runtime == "transformers":
         return base
-    return safe_model_name(f"{base}-{variant}")
+    if not onnx_file:
+        return safe_model_name(f"{base}-onnx")
+    variant = variant_name(onnx_file)
+    suffix = "onnx" if variant == "default" else f"onnx-{variant}"
+    return safe_model_name(f"{base}-{suffix}")
 
 
 def _is_quantized(path: str) -> bool:

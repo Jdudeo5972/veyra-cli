@@ -46,6 +46,7 @@ MODEL = {
 
 MODE = {
     "base": "Raw completion mode",
+    "template": "Use the model tokenizer chat template",
     "chatml": "ChatML conversation mode",
     "qwen": "Qwen ChatML-style mode",
     "gemma": "Gemma start_of_turn mode",
@@ -131,6 +132,12 @@ class VeyraCompleter(Completer):
                 for name in self.model_names_cb():
                     if name.startswith(current):
                         yield Completion(name, start_position=start)
+            elif len(parts) == 4 and parts[1] == "add":
+                yield from _dict_completions(
+                    {"onnx": "Use ONNX Runtime", "transformers": "Use Safetensors with Transformers"},
+                    current,
+                    start,
+                )
         elif command == "/mode" and len(parts) == 2:
             yield from _dict_completions(MODE, current, start)
         elif command == "/autoload" and len(parts) == 2:

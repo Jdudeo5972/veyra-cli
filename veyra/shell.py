@@ -27,9 +27,9 @@ from .hf import (
     variant_name,
 )
 from .inspect import format_inspection, inspect_model
-from .prompts import PROMPT_MODES, format_prompt, infer_prompt_mode, normalize_mode
+from .prompts import PROMPT_MODES, infer_prompt_mode, normalize_mode
 from .registry import CHATS_DIR, CONFIG_PATH, HISTORY_PATH, MODELS_DIR, current_model_entry, load_config, models, register_model, remove_model, safe_model_name, save_config
-from .runner import OnnxCausalLMRunner, UnsupportedModelError, available_devices, device_install_hint, device_rows, model_context_length, normalize_device, provider_for_device
+from .runner import UnsupportedModelError, available_devices, create_runner, device_install_hint, device_rows, model_context_length, normalize_device, provider_for_device
 from .theme import THEMES, get_theme, normalize_theme
 
 
@@ -39,7 +39,7 @@ class VeyraShell:
         self.args = args
         self.config = load_config()
         self.theme = get_theme(self.config.get("theme"))
-        self.runner: OnnxCausalLMRunner | None = None
+        self.runner = None
         self.load_error: str | None = None
         self.system_prompt: str | None = None
         self._last_tab_at = 0.0
@@ -201,7 +201,7 @@ class VeyraShell:
             [[], [("label", "  Tips for getting started")]],
             [[("muted", "    "), (status_role, "\u25cf " + state)], [("label", "  Model: "), ("value", model)]],
             [[("muted", f"    autoload: {autoload}")], [("label", "  Mode:  "), ("value", mode)]],
-            [[("muted", "    Using local ONNX engine")], [("label", "  Generation Settings")]],
+            [[("muted", f"   Using {self.current_runtime_label()} engine")], [("label", "  Generation Settings")]],
             [[("muted", "    Type /help for commands")], [("value", f"  output:{defaults.get('max_new_tokens', 128)} temp:{defaults.get('temperature', 0.8)} top-k:{defaults.get('top_k', 40)}")]],
             [[], [("value", f"  repeat:{defaults.get('repetition_penalty', 1.0)} top-p:{defaults.get('top_p', 1.0)}")]],
             [[], [("value", f"  context:{context_text}")]],
@@ -215,7 +215,7 @@ class VeyraShell:
         if not entry:
             return False
         try:
-            self.runner = OnnxCausalLMRunner(entry["path"], device=self.config.get("device", "cpu"))
+            self.runner = create_runner(entry, device=self.config.get("device", "cpu"))
             self.apply_model_profile(entry)
             self.load_error = None
             return True
@@ -240,7 +240,7 @@ class VeyraShell:
         defaults = self.config.get("defaults", {})
         try:
             prompt, dropped = self.prompt_with_sliding_window(text, history, defaults)
-        except ValueError as exc:
+        except (ValueError, RuntimeError) as exc:
             self.error(str(exc))
             return
         if dropped:
@@ -290,7 +290,7 @@ class VeyraShell:
             raise ValueError(f"Context length {limit} exceeds this model's limit of {self.runner.max_context_length}.")
         dropped = 0
         while True:
-            prompt = format_prompt(text, mode, history=remaining, system_prompt=self.system_prompt)
+            prompt = self.runner.format_conversation(text, mode, remaining, self.system_prompt)
             if not limit or self.runner.token_count(prompt) + output_budget <= int(limit):
                 return prompt, dropped
             if not remaining:
@@ -347,7 +347,7 @@ class VeyraShell:
     def help(self) -> None:
         rows = [
             ("/model", "[list|use|fetch|refresh|update|test|add|inspect|info|remove]"),
-            ("/mode", "[base|chatml|qwen|gemma|mistral|llama3]"),
+            ("/mode", "[base|template|chatml|qwen|gemma|mistral|llama3]"),
             ("/theme", "[list|veyra|warm|red|pink|lime|green|blue|cyan|purple|orange|gray|rainbow|mono]"),
             ("/profile", "[show|name NAME|mode MODE]"),
             ("/device", "[list|cpu|directml|openvino]"),
@@ -520,7 +520,7 @@ class VeyraShell:
         elif action == "test":
             self.model_test(args[1] if len(args) >= 2 else None)
         elif action == "add" and len(args) >= 2:
-            self.add_model(args[1], None)
+            self.add_model(args[1], None, args[2] if len(args) >= 3 else "auto")
         elif action == "inspect":
             self.inspect_current()
         elif action == "info":
@@ -528,7 +528,7 @@ class VeyraShell:
         elif action == "remove" and len(args) >= 2:
             self.remove_model_command(args[1])
         else:
-            self.warn("Usage: /model [list|use NAME|fetch [REPO_ID]|refresh|update [all]|test [NAME]|add PATH|inspect|info [NAME]|remove NAME]")
+            self.warn("Usage: /model [list|use NAME|fetch [REPO_ID]|refresh|update [all]|test [NAME]|add PATH [onnx|transformers]|inspect|info [NAME]|remove NAME]")
 
     def list_models(self) -> None:
         if not models(self.config):
@@ -537,7 +537,8 @@ class VeyraShell:
         current = self.config.get("current_model")
         for name, entry in models(self.config).items():
             mark = "*" if name == current else " "
-            print(f"{mark} {self.theme.text('value', name)} {self.theme.text('muted', '(' + entry.get('source', 'unknown') + ')')}")
+            details = f"{entry.get('source', 'unknown')}, {entry.get('runtime', 'onnx')}"
+            print(f"{mark} {self.theme.text('value', name)} {self.theme.text('muted', '(' + details + ')')}")
 
     def remove_model_command(self, name: str) -> None:
         installed = models(self.config)
@@ -582,49 +583,60 @@ class VeyraShell:
                 return
             selected = choices[int(raw) - 1]
         repo_id = selected["repo_id"]
-        onnx_file = self.select_onnx_variant(selected)
-        if not onnx_file:
+        runtime_choice = self.select_model_runtime(selected)
+        if not runtime_choice:
             return
+        runtime, onnx_file = runtime_choice
         try:
-            path, commit = download_model(repo_id, onnx_file=onnx_file)
+            path, commit = download_model(repo_id, onnx_file=onnx_file, runtime=runtime)
             entry = registry_entry(
                 repo_id,
                 path,
                 commit=commit,
                 onnx_file=onnx_file,
+                runtime=runtime,
             )
-            name = fetched_model_name(repo_id, onnx_file, len(selected["onnx_files"]))
+            name = fetched_model_name(repo_id, onnx_file, len(selected["onnx_files"]), runtime=runtime)
             register_model(self.config, name, entry)
             self.runner = None
-            self.load_current_model()
-            self.success(f"Fetched and selected {name} ({variant_name(onnx_file)}).")
+            loaded = self.load_current_model()
+            variant = variant_name(onnx_file) if onnx_file else "Safetensors"
+            if loaded:
+                self.success(f"Fetched and selected {name} ({runtime}: {variant}).")
+            else:
+                self.warn(f"Fetched and selected {name}, but it could not be loaded. See the error above.")
         except Exception as exc:
             self.error(f"Fetch failed: {exc}")
 
-    def select_onnx_variant(self, model: dict) -> str | None:
+    def select_model_runtime(self, model: dict) -> tuple[str, str | None] | None:
         variants = model.get("onnx_files", [])
-        if not variants:
-            self.error(f"No ONNX variants found in {model['repo_id']}.")
+        choices: list[tuple[str, str | None, str]] = []
+        if model.get("has_transformers"):
+            choices.append(("transformers", None, "Transformers (Safetensors)"))
+        recommended = recommended_onnx_file(variants) if variants else None
+        for path in variants:
+            suffix = " (recommended lightweight runtime)" if path == recommended else ""
+            choices.append(("onnx", path, f"ONNX: {path}{suffix}"))
+        if not choices:
+            self.error(f"No supported model files found in {model['repo_id']}.")
             return None
-        if len(variants) == 1:
-            return variants[0]
-        recommended = recommended_onnx_file(variants)
-        print(self.theme.text("label", "Available ONNX variants:"))
-        for idx, path in enumerate(variants, 1):
-            suffix = " (recommended)" if path == recommended else ""
+        if len(choices) == 1:
+            return choices[0][0], choices[0][1]
+        print(self.theme.text("label", "Available runtimes and variants:"))
+        for idx, (_, _, label) in enumerate(choices, 1):
             print(
                 f"{self.theme.text('label', str(idx) + '.')} "
-                f"{self.theme.text('value', path)}"
-                f"{self.theme.text('muted', suffix)}"
+                f"{self.theme.text('value', label)}"
             )
-        default = variants.index(recommended) + 1
-        raw = input(f"Select variant number [{default}]: ").strip()
+        default = next((idx for idx, item in enumerate(choices, 1) if item[0] == "onnx" and item[1] == recommended), 1)
+        raw = input(f"Select runtime number [{default}]: ").strip()
         if not raw:
-            return recommended
-        if not raw.isdigit() or not (1 <= int(raw) <= len(variants)):
+            return choices[default - 1][0], choices[default - 1][1]
+        if not raw.isdigit() or not (1 <= int(raw) <= len(choices)):
             self.warn("Cancelled.")
             return None
-        return variants[int(raw) - 1]
+        selected = choices[int(raw) - 1]
+        return selected[0], selected[1]
 
     def remote_list(self):
         try:
@@ -633,7 +645,7 @@ class VeyraShell:
             self.error(f"Could not query Hugging Face: {exc}")
             return []
         if not choices:
-            self.warn("No compatible ONNX models found in veyra-ai.")
+            self.warn("No compatible ONNX or Transformers models found in veyra-ai.")
             return []
         for idx, item in enumerate(choices, 1):
             print(f"{self.theme.text('label', str(idx) + '.')} {self.theme.text('value', item['repo_id'])}")
@@ -647,14 +659,16 @@ class VeyraShell:
                 self.warn(f"Skipping {name}: not a Hugging Face model.")
                 continue
             try:
+                runtime = entry.get("runtime", "onnx")
                 onnx_file = entry.get("onnx_file")
-                if not onnx_file and entry.get("path"):
+                if runtime == "onnx" and not onnx_file and entry.get("path"):
                     info = inspect_model(entry["path"])
                     onnx_file = info.onnx_path.relative_to(info.model_dir).as_posix()
                 path, commit = download_model(
                     entry["repo_id"],
                     entry.get("revision", "main"),
                     onnx_file=onnx_file,
+                    runtime=runtime,
                 )
                 refreshed = registry_entry(
                     entry["repo_id"],
@@ -662,6 +676,7 @@ class VeyraShell:
                     revision=entry.get("revision", "main"),
                     commit=commit,
                     onnx_file=onnx_file,
+                    runtime=runtime,
                 )
                 if entry.get("profile"):
                     refreshed["profile"] = entry["profile"]
@@ -671,17 +686,14 @@ class VeyraShell:
                 self.error(f"Could not update {name}: {exc}")
         save_config(self.config)
 
-    def add_model(self, path: str, name: str | None) -> None:
+    def add_model(self, path: str, name: str | None, runtime: str = "auto") -> None:
         added = False
         for candidate in find_model_dirs(Path(path).expanduser()):
             try:
-                info = inspect_model(candidate)
-                if not info.supported:
-                    continue
-                model_name = name or safe_model_name(info.model_dir.name)
+                entry = make_local_model_entry(candidate, runtime=runtime)
+                model_name = name or safe_model_name(candidate.name)
                 if name and added:
-                    model_name = safe_model_name(info.model_dir.name)
-                entry = make_local_entry(info)
+                    model_name = safe_model_name(candidate.name)
                 register_model(self.config, model_name, entry)
                 added = True
                 self.success(f"Added {model_name}.")
@@ -692,12 +704,8 @@ class VeyraShell:
             self.load_current_model()
             return
         try:
-            info = inspect_model(path)
-            if not info.supported:
-                print(format_inspection(info))
-                return
             model_name = name or safe_model_name(Path(path).expanduser().resolve().name)
-            entry = make_local_entry(info)
+            entry = make_local_model_entry(Path(path).expanduser().resolve(), runtime=runtime)
             register_model(self.config, model_name, entry)
             self.runner = None
             self.load_current_model()
@@ -713,9 +721,10 @@ class VeyraShell:
             return
         start = time.perf_counter()
         try:
-            runner = OnnxCausalLMRunner(entry["path"], device=self.config.get("device", "cpu"))
+            runner = create_runner(entry, device=self.config.get("device", "cpu"))
             load_s = time.perf_counter() - start
-            prompt = format_prompt("Say hi", entry.get("mode", self.config.get("current_mode", "chatml")))
+            mode = entry.get("mode", self.config.get("current_mode", "chatml"))
+            prompt = runner.format_conversation("Say hi", mode, [], None)
             gen_start = time.perf_counter()
             first = next(runner.generate(prompt, max_new_tokens=1, temperature=0), "")
             total = time.perf_counter() - start
@@ -729,7 +738,10 @@ class VeyraShell:
         if not entry:
             self.warn("No current model.")
             return
-        print(format_inspection(inspect_model(entry["path"])))
+        if entry.get("runtime", "onnx") == "transformers":
+            print(format_transformers_inspection(Path(entry["path"])))
+        else:
+            print(format_inspection(inspect_model(entry["path"])))
 
     def model_info(self, name: str | None = None) -> None:
         target = name or self.config.get("current_model")
@@ -739,22 +751,33 @@ class VeyraShell:
             return
         root = Path(entry["path"])
         limit = self.model_limit_for_entry(entry)
-        try:
-            info = inspect_model(root)
-            onnx = info.onnx_path.relative_to(root)
-            size = info.onnx_path.stat().st_size / (1024 * 1024)
-            cache = f"yes ({len(info.cache_inputs) // 2} layers)" if info.cache_inputs else "no"
-            supported = "yes" if info.supported else "no"
-        except Exception as exc:
-            self.error(f"Could not inspect {target}: {exc}")
-            return
+        runtime = entry.get("runtime", "onnx")
+        if runtime == "transformers":
+            weights = list(root.glob("*.safetensors"))
+            files = ", ".join(path.name for path in weights)
+            size = sum(path.stat().st_size for path in weights) / (1024 * 1024)
+            model_file = f"{files} ({size:.1f} MiB)"
+            cache = "native"
+            supported = "yes" if weights and (root / "tokenizer.json").exists() else "no"
+        else:
+            try:
+                info = inspect_model(root)
+                onnx = info.onnx_path.relative_to(root)
+                size = info.onnx_path.stat().st_size / (1024 * 1024)
+                model_file = f"{onnx} ({size:.1f} MiB)"
+                cache = f"yes ({len(info.cache_inputs) // 2} layers)" if info.cache_inputs else "no"
+                supported = "yes" if info.supported else "no"
+            except Exception as exc:
+                self.error(f"Could not inspect {target}: {exc}")
+                return
         rows = {
             "model": target,
             "source": entry.get("source", "unknown"),
             "repo": entry.get("repo_id") or "local",
             "path": str(root),
-            "onnx": f"{onnx} ({size:.1f} MiB)",
-            "architecture": entry.get("architecture") or info.model_type or info.architecture or "unknown",
+            "runtime": runtime,
+            "weights": model_file,
+            "architecture": entry.get("architecture") or "unknown",
             "context": str(limit or "unknown"),
             "kv cache": cache,
             "supported": supported,
@@ -770,7 +793,7 @@ class VeyraShell:
             return
         mode = normalize_mode(args[0])
         if args[0] != mode and args[0] not in PROMPT_MODES:
-            self.warn("Usage: /mode [base|chatml|qwen|gemma|mistral|llama3]")
+            self.warn("Usage: /mode [base|template|chatml|qwen|gemma|mistral|llama3]")
             return
         self.config["current_mode"] = mode
         entry = self.current_entry()
@@ -912,6 +935,16 @@ class VeyraShell:
                 except importlib.metadata.PackageNotFoundError:
                     ort_version = None
         self.doctor_row(bool(ort_version), "ONNX Runtime", ort_version or "not installed")
+        try:
+            transformers_version = importlib.metadata.version("transformers")
+        except importlib.metadata.PackageNotFoundError:
+            transformers_version = None
+        self.doctor_row(
+            bool(transformers_version),
+            "Transformers",
+            transformers_version or "optional runtime not installed",
+            warning=not bool(transformers_version),
+        )
         for label, path in (("config", CONFIG_PATH.parent), ("models", MODELS_DIR), ("chats", CHATS_DIR), ("history", HISTORY_PATH.parent)):
             self.doctor_row(path.exists() and os.access(path, os.W_OK), label, str(path))
         device = normalize_device(self.config.get("device"))
@@ -921,9 +954,16 @@ class VeyraShell:
             self.doctor_row(False, "model", "none selected")
             return
         try:
-            info = inspect_model(entry["path"])
-            self.doctor_row(info.tokenizer_path.exists(), "tokenizer", str(info.tokenizer_path))
-            self.doctor_row(info.supported, "ONNX graph", "supported" if info.supported else "unsupported")
+            root = Path(entry["path"])
+            runtime = entry.get("runtime", "onnx")
+            tokenizer_path = root / "tokenizer.json"
+            self.doctor_row(tokenizer_path.exists(), "tokenizer", str(tokenizer_path))
+            if runtime == "onnx":
+                info = inspect_model(root)
+                self.doctor_row(info.supported, "ONNX graph", "supported" if info.supported else "unsupported")
+            else:
+                weights = list(root.glob("*.safetensors"))
+                self.doctor_row(bool(weights), "Safetensors", f"{len(weights)} file(s)")
             limit = self.current_model_limit()
             self.doctor_row(bool(limit), "context", str(limit or "missing from model metadata"), warning=not bool(limit))
             output_budget = int(self.config.get("defaults", {}).get("max_new_tokens", 128))
@@ -934,7 +974,7 @@ class VeyraShell:
                 f"{output_budget} max new / {limit or 'unknown'} context",
             )
             if self.runner is None:
-                OnnxCausalLMRunner(entry["path"], device=device)
+                create_runner(entry, device=device)
             self.doctor_row(True, "model load", str(name))
         except Exception as exc:
             self.doctor_row(False, "model load", str(exc))
@@ -999,6 +1039,10 @@ class VeyraShell:
     def current_entry(self) -> dict | None:
         name = self.config.get("current_model")
         return models(self.config).get(name) if name else None
+
+    def current_runtime_label(self) -> str:
+        entry = self.current_entry()
+        return "Transformers" if entry and entry.get("runtime") == "transformers" else "ONNX"
 
     def generation_summary(self, entry: dict | None = None) -> str:
         defaults = dict(self.config.get("defaults", {}))
@@ -1092,7 +1136,7 @@ def info_config(model_dir: Path, name: str = "config.json") -> dict:
 
 
 def make_local_entry(info) -> dict:
-    mode = infer_prompt_mode(info_config(info.model_dir), info_config(info.model_dir, "tokenizer_config.json"))
+    mode = local_prompt_mode(info.model_dir)
     return {
         "source": "local",
         "repo_id": None,
@@ -1107,12 +1151,78 @@ def make_local_entry(info) -> dict:
     }
 
 
+def make_local_model_entry(model_dir: Path, runtime: str = "auto") -> dict:
+    model_dir = model_dir.expanduser().resolve()
+    if not (model_dir / "tokenizer.json").exists():
+        raise FileNotFoundError(f"Missing tokenizer.json in {model_dir}")
+    runtime = runtime.lower()
+    if runtime not in {"auto", "onnx", "transformers"}:
+        raise ValueError("Runtime must be auto, onnx, or transformers.")
+    has_onnx = bool(list(model_dir.glob("*.onnx")) or list(model_dir.rglob("*.onnx")))
+    has_transformers = bool(list(model_dir.glob("*.safetensors")))
+    selected = "onnx" if runtime == "auto" and has_onnx else ("transformers" if runtime == "auto" else runtime)
+    if selected == "onnx":
+        if not has_onnx:
+            raise FileNotFoundError(f"No .onnx model files found in {model_dir}")
+        info = inspect_model(model_dir)
+        if not info.supported:
+            raise RuntimeError(format_inspection(info))
+        return make_local_entry(info)
+    weights = list(model_dir.glob("*.safetensors"))
+    if not weights:
+        raise FileNotFoundError(f"No .onnx or .safetensors model files found in {model_dir}")
+    config = info_config(model_dir)
+    architectures = config.get("architectures") or []
+    architecture = config.get("model_type") or (architectures[0] if architectures else "unknown")
+    mode = local_prompt_mode(model_dir)
+    return {
+        "source": "local",
+        "repo_id": None,
+        "revision": None,
+        "downloaded_commit": None,
+        "path": str(model_dir),
+        "runtime": "transformers",
+        "trust_remote_code": False,
+        "architecture": str(architecture).lower(),
+        "mode": mode,
+        "profile": {"mode": mode, "assistant_name": "Veyra"},
+        "quantized": False,
+    }
+
+
+def local_prompt_mode(model_dir: Path) -> str:
+    tokenizer_config = info_config(model_dir, "tokenizer_config.json")
+    if (model_dir / "chat_template.jinja").exists() or tokenizer_config.get("chat_template"):
+        return "template"
+    return infer_prompt_mode(info_config(model_dir), tokenizer_config)
+
+
+def format_transformers_inspection(model_dir: Path) -> str:
+    model_dir = model_dir.expanduser().resolve()
+    tokenizer = model_dir / "tokenizer.json"
+    weights = list(model_dir.glob("*.safetensors"))
+    config = info_config(model_dir)
+    architectures = config.get("architectures") or []
+    architecture = config.get("model_type") or (architectures[0] if architectures else "unknown")
+    template = model_dir / "chat_template.jinja"
+    lines = [
+        "Runtime: transformers",
+        f"Weights: {', '.join(str(path) for path in weights) or 'missing'}",
+        f"Tokenizer: {tokenizer}",
+        f"Architecture: {architecture}",
+        f"Chat template: {template if template.exists() else 'tokenizer config or none'}",
+        f"Status: {'supported' if weights and tokenizer.exists() else 'unsupported'}",
+    ]
+    return "\n".join(lines)
+
+
 def find_model_dirs(root: Path) -> list[Path]:
     root = root.resolve()
     if not root.is_dir():
         return []
     candidates: list[Path] = []
     for path in [root, *[p for p in root.iterdir() if p.is_dir()]]:
-        if (path / "tokenizer.json").exists() and (list(path.glob("*.onnx")) or list(path.rglob("*.onnx"))):
+        has_weights = list(path.glob("*.safetensors")) or list(path.glob("*.onnx")) or list(path.rglob("*.onnx"))
+        if (path / "tokenizer.json").exists() and has_weights:
             candidates.append(path)
     return candidates

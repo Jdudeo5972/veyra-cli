@@ -14,14 +14,13 @@ from .hf import (
     variant_name,
 )
 from .inspect import format_inspection, inspect_model
-from .prompts import format_prompt, infer_prompt_mode
 from .registry import load_config, register_model, safe_model_name
-from .runner import OnnxCausalLMRunner
-from .shell import VeyraShell, find_model_dirs, make_local_entry, update_message
+from .runner import create_runner
+from .shell import VeyraShell, find_model_dirs, format_transformers_inspection, make_local_model_entry, update_message
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="veyra", description="Run local ONNX causal language models.")
+    parser = argparse.ArgumentParser(prog="veyra", description="Run local ONNX and Transformers causal language models.")
     parser.add_argument("prompt", nargs="?", help="Prompt text to run, or a subcommand.")
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     parser.add_argument("--no-load", action="store_true", help="Do not autoload the current model in the shell.")
@@ -67,9 +66,9 @@ def run_prompt(prompt: str) -> int:
         return 1
     profile = entry.get("profile", {}) if isinstance(entry.get("profile"), dict) else {}
     mode = profile.get("mode", config.get("current_mode", "chatml"))
-    formatted = format_prompt(prompt, mode)
     try:
-        runner = OnnxCausalLMRunner(entry["path"], device=config.get("device", "cpu"))
+        runner = create_runner(entry, device=config.get("device", "cpu"))
+        formatted = runner.format_conversation(prompt, mode, [], None)
         defaults = dict(config.get("defaults", {}))
         if isinstance(profile.get("generation"), dict):
             defaults.update(profile["generation"])
@@ -94,7 +93,7 @@ def models_cmd() -> int:
         return 0
     for name, entry in installed.items():
         mark = "*" if name == current else " "
-        print(f"{mark} {name} ({entry.get('source', 'unknown')})")
+        print(f"{mark} {name} ({entry.get('source', 'unknown')}, {entry.get('runtime', 'onnx')})")
     return 0
 
 
@@ -121,53 +120,63 @@ def fetch_cmd(repo_id: str | None = None) -> int:
             return 1
         selected = choices[int(raw) - 1]
     repo_id = selected["repo_id"]
-    onnx_file = select_onnx_variant(selected)
-    if not onnx_file:
+    runtime_choice = select_runtime_variant(selected)
+    if not runtime_choice:
         return 1
+    runtime, onnx_file = runtime_choice
     try:
-        path, commit = download_model(repo_id, onnx_file=onnx_file)
+        path, commit = download_model(repo_id, onnx_file=onnx_file, runtime=runtime)
         config = load_config()
-        name = fetched_model_name(repo_id, onnx_file, len(selected["onnx_files"]))
+        name = fetched_model_name(repo_id, onnx_file, len(selected["onnx_files"]), runtime=runtime)
         entry = registry_entry(
             repo_id,
             path,
             commit=commit,
             onnx_file=onnx_file,
+            runtime=runtime,
         )
         register_model(config, name, entry)
     except Exception as exc:
         print(f"Fetch failed: {exc}")
         return 1
-    print(f"Fetched and selected {name} ({variant_name(onnx_file)}).")
+    variant = variant_name(onnx_file) if onnx_file else "Safetensors"
+    print(f"Fetched and selected {name} ({runtime}: {variant}).")
     return 0
 
 
-def select_onnx_variant(model: dict) -> str | None:
+def select_runtime_variant(model: dict) -> tuple[str, str | None] | None:
     variants = model.get("onnx_files", [])
-    if not variants:
-        print(f"No ONNX variants found in {model['repo_id']}.")
+    choices: list[tuple[str, str | None, str]] = []
+    if model.get("has_transformers"):
+        choices.append(("transformers", None, "Transformers (Safetensors)"))
+    recommended = recommended_onnx_file(variants) if variants else None
+    for path in variants:
+        suffix = " (recommended lightweight runtime)" if path == recommended else ""
+        choices.append(("onnx", path, f"ONNX: {path}{suffix}"))
+    if not choices:
+        print(f"No supported model files found in {model['repo_id']}.")
         return None
-    if len(variants) == 1:
-        return variants[0]
-    recommended = recommended_onnx_file(variants)
-    print("Available ONNX variants:")
-    for idx, path in enumerate(variants, 1):
-        suffix = " (recommended)" if path == recommended else ""
-        print(f"{idx}. {path}{suffix}")
-    default = variants.index(recommended) + 1
-    raw = input(f"Select variant number [{default}]: ").strip()
+    if len(choices) == 1:
+        return choices[0][0], choices[0][1]
+    print("Available runtimes and variants:")
+    for idx, (_, _, label) in enumerate(choices, 1):
+        print(f"{idx}. {label}")
+    default = next((idx for idx, item in enumerate(choices, 1) if item[0] == "onnx" and item[1] == recommended), 1)
+    raw = input(f"Select runtime number [{default}]: ").strip()
     if not raw:
-        return recommended
-    if not raw.isdigit() or not (1 <= int(raw) <= len(variants)):
+        return choices[default - 1][0], choices[default - 1][1]
+    if not raw.isdigit() or not (1 <= int(raw) <= len(choices)):
         print("Cancelled.")
         return None
-    return variants[int(raw) - 1]
+    chosen = choices[int(raw) - 1]
+    return chosen[0], chosen[1]
 
 
 def add_cmd(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="veyra add")
     parser.add_argument("path")
     parser.add_argument("--name")
+    parser.add_argument("--runtime", choices=("auto", "onnx", "transformers"), default="auto")
     args = parser.parse_args(argv)
     root = Path(args.path).expanduser()
     scanned = find_model_dirs(root)
@@ -175,40 +184,39 @@ def add_cmd(argv: list[str]) -> int:
         config = load_config()
         for candidate in scanned:
             try:
-                info = inspect_model(candidate)
-                if info.supported:
-                    name = safe_model_name(info.model_dir.name)
-                    register_model(config, name, make_local_entry(info))
-                    print(f"Added {name}.")
+                entry = make_local_model_entry(candidate, runtime=args.runtime)
+                name = safe_model_name(candidate.name)
+                register_model(config, name, entry)
+                print(f"Added {name}.")
             except Exception as exc:
                 print(f"Skipping {candidate}: {exc}")
         return 0
-    info = inspect_model(args.path)
-    if not info.supported:
-        print(format_inspection(info))
-        return 1
     config = load_config()
-    name = args.name or safe_model_name(info.model_dir.name)
-    entry = make_local_entry(info)
+    model_dir = Path(args.path).expanduser().resolve()
+    name = args.name or safe_model_name(model_dir.name)
+    entry = make_local_model_entry(model_dir, runtime=args.runtime)
     register_model(config, name, entry)
     print(f"Added and selected {name}.")
     return 0
 
 
-def _read_json(path):
-    try:
-        import json
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
 def inspect_cmd(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="veyra inspect")
     parser.add_argument("path")
+    parser.add_argument("--runtime", choices=("auto", "onnx", "transformers"), default="auto")
     args = parser.parse_args(argv)
-    print(format_inspection(inspect_model(args.path)))
+    root = Path(args.path).expanduser().resolve()
+    has_transformers = bool(list(root.glob("*.safetensors")))
+    has_onnx = bool(list(root.glob("*.onnx")) or list(root.rglob("*.onnx")))
+    if args.runtime == "transformers" or (args.runtime == "auto" and has_transformers and not has_onnx):
+        print(format_transformers_inspection(root))
+    elif args.runtime == "onnx" or has_onnx:
+        print(format_inspection(inspect_model(root)))
+        if args.runtime == "auto" and has_transformers:
+            print("\n" + format_transformers_inspection(root))
+    else:
+        print(f"No .onnx or .safetensors model files found in {root}")
+        return 1
     return 0
 
 
