@@ -7,7 +7,7 @@ from typing import Iterator
 import numpy as np
 
 from .prompts import format_prompt
-from .runner import model_context_length, sample_next_token
+from .runner import COMMON_STOP_TOKENS, model_context_length, sample_next_token
 
 
 class TransformersCausalLMRunner:
@@ -142,8 +142,14 @@ class TransformersCausalLMRunner:
 
     def _eos_ids(self) -> set[int]:
         values: list[int | None] = []
-        for value in (getattr(self.tokenizer, "eos_token_id", None), getattr(self.model.config, "eos_token_id", None)):
+        for value in (
+            getattr(self.tokenizer, "eos_token_id", None),
+            getattr(self.model.config, "eos_token_id", None),
+            getattr(getattr(self.model, "generation_config", None), "eos_token_id", None),
+        ):
             values.extend(value if isinstance(value, list) else [value])
+        vocab = self.tokenizer.get_vocab()
+        values.extend(vocab[token] for token in COMMON_STOP_TOKENS if token in vocab)
         return {int(item) for item in values if isinstance(item, int)}
 
     def _read_json(self, name: str) -> dict:

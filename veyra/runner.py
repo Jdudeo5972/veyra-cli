@@ -17,6 +17,15 @@ DEVICE_PROVIDERS = {
     "openvino": "OpenVINOExecutionProvider",
 }
 
+COMMON_STOP_TOKENS = (
+    "<|im_end|>",
+    "<|eot_id|>",
+    "<end_of_turn>",
+    "<|endoftext|>",
+    "</s>",
+    "<eos>",
+)
+
 
 class UnsupportedModelError(RuntimeError):
     def __init__(self, unsupported_inputs: list[str]) -> None:
@@ -351,7 +360,7 @@ class OnnxCausalLMRunner:
             elif isinstance(value, list):
                 ids.update(int(v) for v in value if isinstance(v, int))
         vocab = self.tokenizer.get_vocab()
-        for token in ("<|im_end|>", "</s>", "<eos>"):
+        for token in COMMON_STOP_TOKENS:
             if token in vocab:
                 ids.add(vocab[token])
         return ids

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "veyra"
-version = "2026.10.02"
+version = "2026.10.02.1"
 description = "Lightweight CLI for local ONNX and Transformers causal language models."
 readme = "README.md"
 license = "Apache-2.0"
