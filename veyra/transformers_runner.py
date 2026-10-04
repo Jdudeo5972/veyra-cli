@@ -238,11 +238,12 @@ class TransformersRunner:
                 generated.append(next_id)
                 next_tensor = torch.tensor([[next_id]], dtype=decoder_ids.dtype, device=self.device)
                 decoder_ids = torch.cat((decoder_ids, next_tensor), dim=1)
-                text = self.tokenizer.decode(generated, skip_special_tokens=True)
+                visible_ids = self._visible_seq2seq_ids(generated)
+                text = self.tokenizer.decode(visible_ids, skip_special_tokens=True)
                 delta = (
                     text[len(previous_text) :]
                     if text.startswith(previous_text)
-                    else self.tokenizer.decode([next_id], skip_special_tokens=True)
+                    else self.tokenizer.decode(self._visible_seq2seq_ids([next_id]), skip_special_tokens=True)
                 )
                 previous_text = text
                 if delta:
@@ -255,6 +256,17 @@ class TransformersRunner:
                 if isinstance(value, int):
                     return value
         raise RuntimeError("Seq2Seq model does not define decoder_start_token_id, bos_token_id, or pad_token_id.")
+
+    def _visible_seq2seq_ids(self, ids: list[int]) -> list[int]:
+        visible: list[int] = []
+        for token_id in ids:
+            token = self.tokenizer.convert_ids_to_tokens(token_id)
+            if isinstance(token, str) and token.startswith("<unused") and token.endswith(">"):
+                number = token[len("<unused") : -1]
+                if number.isdigit():
+                    continue
+            visible.append(token_id)
+        return visible
 
     def _eos_ids(self) -> set[int]:
         values: list[int | None] = []

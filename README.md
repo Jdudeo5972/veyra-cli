@@ -255,6 +255,7 @@ Currently tested support includes:
 - SmolLM2-style cached exports
 - Safetensors causal language models supported by Transformers `AutoModelForCausalLM`
 - Safetensors encoder-decoder models supported by Transformers `AutoModelForSeq2SeqLM`
+- T5Gemma 2 pretrained encoder-decoder checkpoints through Transformers
 - standalone `chat_template.jinja` files used by Veyra instruct models
 
 Encoder-decoder models default to Base mode unless their tokenizer includes a chat template. Their encoder context limit applies to the input prompt; `/tokens` controls the separate decoder output budget.

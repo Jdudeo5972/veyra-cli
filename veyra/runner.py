@@ -476,9 +476,12 @@ def _numpy_dtype(name: Any) -> np.dtype:
 def _config_value(config: dict[str, Any], field: str) -> Any:
     if field in config:
         return config[field]
-    text_config = config.get("text_config")
-    if isinstance(text_config, dict) and field in text_config:
-        return text_config[field]
+    for section in ("text_config", "encoder", "decoder"):
+        nested = config.get(section)
+        if isinstance(nested, dict):
+            value = _config_value(nested, field)
+            if value is not None:
+                return value
     if field == "head_dim":
         hidden = _config_value(config, "hidden_size")
         heads = _config_value(config, "num_attention_heads")
