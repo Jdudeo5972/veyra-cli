@@ -384,8 +384,8 @@ class OnnxCausalLMRunner:
                 from transformers import AutoTokenizer
             except ImportError as exc:
                 raise RuntimeError(
-                    "This ONNX model uses a custom tokenizer chat template. Install template support with "
-                    "`uv tool install 'veyra[transformers]'`."
+                    "This model needs Transformers to render its tokenizer chat template, but the required "
+                    "runtime could not be imported. Reinstall or upgrade Veyra."
                 ) from exc
             if self.template_tokenizer is None:
                 self.template_tokenizer = AutoTokenizer.from_pretrained(

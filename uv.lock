@@ -1330,7 +1330,7 @@ wheels = [
 
 [[package]]
 name = "veyra"
-version = "2026.10.4.2"
+version = "2026.10.4.3"
 source = { editable = "." }
 dependencies = [
     { name = "huggingface-hub" },
@@ -1341,12 +1341,8 @@ dependencies = [
     { name = "onnxruntime-directml", version = "1.24.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and platform_machine == 'AMD64' and sys_platform == 'win32'" },
     { name = "onnxruntime-directml", version = "1.24.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and platform_machine == 'AMD64' and sys_platform == 'win32'" },
     { name = "prompt-toolkit" },
-    { name = "tokenizers" },
-]
-
-[package.optional-dependencies]
-transformers = [
     { name = "safetensors" },
+    { name = "tokenizers" },
     { name = "torch" },
     { name = "transformers" },
 ]
@@ -1358,12 +1354,11 @@ requires-dist = [
     { name = "onnxruntime", marker = "platform_machine != 'AMD64' or sys_platform != 'win32'" },
     { name = "onnxruntime-directml", marker = "platform_machine == 'AMD64' and sys_platform == 'win32'" },
     { name = "prompt-toolkit" },
-    { name = "safetensors", marker = "extra == 'transformers'" },
+    { name = "safetensors" },
     { name = "tokenizers" },
-    { name = "torch", marker = "extra == 'transformers'" },
-    { name = "transformers", marker = "extra == 'transformers'", specifier = ">=4.45" },
+    { name = "torch" },
+    { name = "transformers", specifier = ">=4.45" },
 ]
-provides-extras = ["transformers"]
 
 [[package]]
 name = "wcwidth"

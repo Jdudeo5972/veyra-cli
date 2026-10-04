@@ -4,30 +4,25 @@
 
 ## Install
 
-Recommended install from this checkout:
+From this checkout:
 
 ```bash
-uv tool install '.[transformers]'
+uv tool install .
 ```
 
 From GitHub:
 
 ```bash
-uv tool install "veyra[transformers] @ git+https://github.com/Jdudeo5972/veyra-cli.git"
-```
-
-For a smaller ONNX-only installation:
-
-```bash
-uv tool install .
 uv tool install git+https://github.com/Jdudeo5972/veyra-cli.git
 pipx install git+https://github.com/Jdudeo5972/veyra-cli.git
 ```
 
+The standard installation includes ONNX Runtime, Transformers, PyTorch, and Safetensors. Transformers is the default when a model repository provides Safetensors weights; ONNX remains selectable for compatible exports.
+
 ## Development
 
 ```bash
-uv sync --extra transformers
+uv sync
 uv run veyra
 ```
 

@@ -1016,8 +1016,7 @@ class VeyraShell:
         self.doctor_row(
             bool(transformers_version),
             "Transformers",
-            transformers_version or "optional runtime not installed",
-            warning=not bool(transformers_version),
+            transformers_version or "required runtime not installed",
         )
         for label, path in (("config", CONFIG_PATH.parent), ("models", MODELS_DIR), ("chats", CHATS_DIR), ("history", HISTORY_PATH.parent)):
             self.doctor_row(path.exists() and os.access(path, os.W_OK), label, str(path))

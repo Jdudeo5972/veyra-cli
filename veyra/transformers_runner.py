@@ -17,8 +17,8 @@ class TransformersRunner:
             from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
         except ImportError as exc:
             raise RuntimeError(
-                "Transformers models require the optional runtime. Install it with "
-                "`uv tool install 'veyra[transformers]'` or `pip install 'veyra[transformers]'`."
+                "The Transformers runtime is missing or could not be imported. "
+                "Reinstall or upgrade Veyra to restore its required runtime packages."
             ) from exc
 
         self.model_dir = Path(model_dir).expanduser().resolve()
