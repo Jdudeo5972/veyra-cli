@@ -674,7 +674,7 @@ class VeyraShell:
         variants = model.get("onnx_files", [])
         choices: list[tuple[str, str | None, str]] = []
         if model.get("has_transformers"):
-            choices.append(("transformers", None, "Transformers (Safetensors)"))
+            choices.append(("transformers", None, "Transformers (Safetensors, default)"))
         recommended = recommended_onnx_file(variants) if variants else None
         for path in variants:
             suffix = " (recommended lightweight runtime)" if path == recommended else ""
@@ -690,7 +690,7 @@ class VeyraShell:
                 f"{self.theme.text('label', str(idx) + '.')} "
                 f"{self.theme.text('value', label)}"
             )
-        default = next((idx for idx, item in enumerate(choices, 1) if item[0] == "onnx" and item[1] == recommended), 1)
+        default = next((idx for idx, item in enumerate(choices, 1) if item[0] == "transformers"), 1)
         raw = input(f"Select runtime number [{default}]: ").strip()
         if not raw:
             return choices[default - 1][0], choices[default - 1][1]
@@ -1240,7 +1240,7 @@ def make_local_model_entry(model_dir: Path, runtime: str = "auto") -> dict:
         raise ValueError("Runtime must be auto, onnx, or transformers.")
     has_onnx = bool(list(model_dir.glob("*.onnx")) or list(model_dir.rglob("*.onnx")))
     has_transformers = bool(list(model_dir.glob("*.safetensors")))
-    selected = "onnx" if runtime == "auto" and has_onnx else ("transformers" if runtime == "auto" else runtime)
+    selected = "transformers" if runtime == "auto" and has_transformers else ("onnx" if runtime == "auto" else runtime)
     if selected == "onnx":
         if not has_onnx:
             raise FileNotFoundError(f"No .onnx model files found in {model_dir}")

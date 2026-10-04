@@ -4,13 +4,7 @@
 
 ## Install
 
-From this checkout:
-
-```bash
-uv tool install .
-```
-
-ONNX Runtime remains the lightweight default. Install the optional Transformers/PyTorch runtime when you want to run Safetensors models:
+Recommended install from this checkout:
 
 ```bash
 uv tool install '.[transformers]'
@@ -19,20 +13,21 @@ uv tool install '.[transformers]'
 From GitHub:
 
 ```bash
-uv tool install git+https://github.com/Jdudeo5972/veyra-cli.git
-pipx install git+https://github.com/Jdudeo5972/veyra-cli.git
+uv tool install "veyra[transformers] @ git+https://github.com/Jdudeo5972/veyra-cli.git"
 ```
 
-To install the Transformers runtime directly from GitHub:
+For a smaller ONNX-only installation:
 
 ```bash
-uv tool install "veyra[transformers] @ git+https://github.com/Jdudeo5972/veyra-cli.git"
+uv tool install .
+uv tool install git+https://github.com/Jdudeo5972/veyra-cli.git
+pipx install git+https://github.com/Jdudeo5972/veyra-cli.git
 ```
 
 ## Development
 
 ```bash
-uv sync
+uv sync --extra transformers
 uv run veyra
 ```
 
@@ -74,7 +69,7 @@ Inside the shell:
 /chat export markdown
 ```
 
-`/model add PATH` can point at one model directory or a folder containing multiple model directories. Mixed local folders default to ONNX; use `/model add PATH transformers` or `veyra add PATH --runtime transformers` to select Safetensors. `/model test` runs a one-token smoke test and reports load time, first-token time, total time, and the sampled token. `/model info` shows architecture, runtime, weights, context limit, cache support, and profile metadata.
+`/model add PATH` can point at one model directory or a folder containing multiple model directories. Mixed local folders default to Transformers/Safetensors; use `/model add PATH onnx` or `veyra add PATH --runtime onnx` to select ONNX explicitly. `/model test` runs a one-token smoke test and reports load time, first-token time, total time, and the sampled token. `/model info` shows architecture, runtime, weights, context limit, cache support, and profile metadata.
 
 During generation, Ctrl+C stops generation. On Windows terminals, double-tapping Tab also requests a stop between generated tokens.
 
@@ -82,7 +77,7 @@ During generation, Ctrl+C stops generation. On Windows terminals, double-tapping
 
 `veyra fetch` and `/model fetch` list compatible private or public repositories from the `veyra-ai` Hugging Face organization. You can also fetch any compatible Hub repository directly with `veyra fetch owner/model` or `/model fetch owner/model`.
 
-Repositories may contain root-level Safetensors weights and ONNX exports in `onnx/`. Veyra shows both runtime choices, recommends a lightweight ONNX variant by default when one exists, and downloads only the selected weight format plus tokenizer/config metadata.
+Repositories may contain root-level Safetensors weights and ONNX exports in `onnx/`. Veyra shows both runtime choices and defaults to Transformers when Safetensors weights are available; ONNX remains available as the lightweight option. Only the selected weight format plus tokenizer/config metadata is downloaded.
 
 Sign in before fetching private or gated models:
 

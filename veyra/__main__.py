@@ -195,7 +195,7 @@ def select_runtime_variant(model: dict) -> tuple[str, str | None] | None:
     variants = model.get("onnx_files", [])
     choices: list[tuple[str, str | None, str]] = []
     if model.get("has_transformers"):
-        choices.append(("transformers", None, "Transformers (Safetensors)"))
+        choices.append(("transformers", None, "Transformers (Safetensors, default)"))
     recommended = recommended_onnx_file(variants) if variants else None
     for path in variants:
         suffix = " (recommended lightweight runtime)" if path == recommended else ""
@@ -208,7 +208,7 @@ def select_runtime_variant(model: dict) -> tuple[str, str | None] | None:
     print("Available runtimes and variants:")
     for idx, (_, _, label) in enumerate(choices, 1):
         print(f"{idx}. {label}")
-    default = next((idx for idx, item in enumerate(choices, 1) if item[0] == "onnx" and item[1] == recommended), 1)
+    default = next((idx for idx, item in enumerate(choices, 1) if item[0] == "transformers"), 1)
     raw = input(f"Select runtime number [{default}]: ").strip()
     if not raw:
         return choices[default - 1][0], choices[default - 1][1]
