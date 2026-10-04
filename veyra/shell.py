@@ -286,17 +286,20 @@ class VeyraShell:
         remaining = list(history)
         limit = defaults.get("context_length") or self.runner.max_context_length
         output_budget = max(0, int(defaults.get("max_new_tokens", 128)))
+        reserved_output = 0 if getattr(self.runner, "is_encoder_decoder", False) else output_budget
         if self.runner.max_context_length and limit and int(limit) > self.runner.max_context_length:
             raise ValueError(f"Context length {limit} exceeds this model's limit of {self.runner.max_context_length}.")
         dropped = 0
         while True:
             prompt = self.runner.format_conversation(text, mode, remaining, self.system_prompt)
-            if not limit or self.runner.token_count(prompt) + output_budget <= int(limit):
+            if not limit or self.runner.token_count(prompt) + reserved_output <= int(limit):
                 return prompt, dropped
             if not remaining:
-                raise ValueError(
-                    f"The current prompt plus {output_budget} output tokens does not fit in the {limit}-token context window."
-                )
+                if reserved_output:
+                    raise ValueError(
+                        f"The current prompt plus {output_budget} output tokens does not fit in the {limit}-token context window."
+                    )
+                raise ValueError(f"The current prompt does not fit in the {limit}-token encoder context window.")
             remove_count = 2 if len(remaining) >= 2 and remaining[0].get("role") == "user" and remaining[1].get("role") == "assistant" else 1
             del remaining[:remove_count]
             dropped += remove_count
@@ -752,6 +755,7 @@ class VeyraShell:
         root = Path(entry["path"])
         limit = self.model_limit_for_entry(entry)
         runtime = entry.get("runtime", "onnx")
+        config = info_config(root)
         if runtime == "transformers":
             weights = list(root.glob("*.safetensors"))
             files = ", ".join(path.name for path in weights)
@@ -759,6 +763,7 @@ class VeyraShell:
             model_file = f"{files} ({size:.1f} MiB)"
             cache = "native"
             supported = "yes" if weights and (root / "tokenizer.json").exists() else "no"
+            model_class = "seq2seq" if config.get("is_encoder_decoder") else "causal"
         else:
             try:
                 info = inspect_model(root)
@@ -767,6 +772,7 @@ class VeyraShell:
                 model_file = f"{onnx} ({size:.1f} MiB)"
                 cache = f"yes ({len(info.cache_inputs) // 2} layers)" if info.cache_inputs else "no"
                 supported = "yes" if info.supported else "no"
+                model_class = "causal"
             except Exception as exc:
                 self.error(f"Could not inspect {target}: {exc}")
                 return
@@ -776,6 +782,7 @@ class VeyraShell:
             "repo": entry.get("repo_id") or "local",
             "path": str(root),
             "runtime": runtime,
+            "model class": model_class,
             "weights": model_file,
             "architecture": entry.get("architecture") or "unknown",
             "context": str(limit or "unknown"),
@@ -858,12 +865,12 @@ class VeyraShell:
             if model_limit and value > model_limit:
                 self.error(f"Context length {value} exceeds this model's limit of {model_limit}.")
                 return
-            if value <= int(self.config["defaults"].get("max_new_tokens", 128)):
+            if not self.current_is_encoder_decoder() and value <= int(self.config["defaults"].get("max_new_tokens", 128)):
                 self.error("Context length must be larger than max_new_tokens.")
                 return
         if key == "max_new_tokens" and value is not None:
             context = self.config["defaults"].get("context_length") or self.current_model_limit()
-            if context and value >= context:
+            if not self.current_is_encoder_decoder() and context and value >= context:
                 self.error(f"max_new_tokens must be smaller than the {context}-token context window.")
                 return
         self.config["defaults"][key] = value
@@ -903,6 +910,14 @@ class VeyraShell:
             return self.runner.max_context_length
         entry = self.current_entry()
         return self.model_limit_for_entry(entry)
+
+    def current_is_encoder_decoder(self) -> bool:
+        if self.runner is not None:
+            return bool(getattr(self.runner, "is_encoder_decoder", False))
+        entry = self.current_entry()
+        if not entry or entry.get("runtime", "onnx") != "transformers":
+            return False
+        return bool(info_config(Path(entry["path"])).get("is_encoder_decoder"))
 
     def model_limit_for_entry(self, entry: dict | None) -> int | None:
         if not entry or not entry.get("path"):
@@ -967,11 +982,17 @@ class VeyraShell:
             limit = self.current_model_limit()
             self.doctor_row(bool(limit), "context", str(limit or "missing from model metadata"), warning=not bool(limit))
             output_budget = int(self.config.get("defaults", {}).get("max_new_tokens", 128))
-            budget_ok = not limit or output_budget < limit
+            seq2seq = runtime == "transformers" and bool(info_config(root).get("is_encoder_decoder"))
+            budget_ok = seq2seq or not limit or output_budget < limit
+            budget_detail = (
+                f"{output_budget} max new / {limit or 'unknown'} encoder context"
+                if seq2seq
+                else f"{output_budget} max new / {limit or 'unknown'} context"
+            )
             self.doctor_row(
                 budget_ok,
                 "token budget",
-                f"{output_budget} max new / {limit or 'unknown'} context",
+                budget_detail,
             )
             if self.runner is None:
                 create_runner(entry, device=device)
@@ -1080,7 +1101,7 @@ class VeyraShell:
             self.config["defaults"]["context_length"] = None
             profile["generation"]["context_length"] = None
         output_budget = int(self.config["defaults"].get("max_new_tokens", 128))
-        if limit and output_budget >= limit:
+        if limit and output_budget >= limit and not getattr(self.runner, "is_encoder_decoder", False):
             safe_budget = min(128, max(1, limit - 1))
             self.config["defaults"]["max_new_tokens"] = safe_budget
             profile["generation"]["max_new_tokens"] = safe_budget
@@ -1194,7 +1215,10 @@ def local_prompt_mode(model_dir: Path) -> str:
     tokenizer_config = info_config(model_dir, "tokenizer_config.json")
     if (model_dir / "chat_template.jinja").exists() or tokenizer_config.get("chat_template"):
         return "template"
-    return infer_prompt_mode(info_config(model_dir), tokenizer_config)
+    config = info_config(model_dir)
+    if config.get("is_encoder_decoder"):
+        return "base"
+    return infer_prompt_mode(config, tokenizer_config)
 
 
 def format_transformers_inspection(model_dir: Path) -> str:
@@ -1204,12 +1228,14 @@ def format_transformers_inspection(model_dir: Path) -> str:
     config = info_config(model_dir)
     architectures = config.get("architectures") or []
     architecture = config.get("model_type") or (architectures[0] if architectures else "unknown")
+    model_class = "AutoModelForSeq2SeqLM" if config.get("is_encoder_decoder") else "AutoModelForCausalLM"
     template = model_dir / "chat_template.jinja"
     lines = [
         "Runtime: transformers",
         f"Weights: {', '.join(str(path) for path in weights) or 'missing'}",
         f"Tokenizer: {tokenizer}",
         f"Architecture: {architecture}",
+        f"Model class: {model_class}",
         f"Chat template: {template if template.exists() else 'tokenizer config or none'}",
         f"Status: {'supported' if weights and tokenizer.exists() else 'unsupported'}",
     ]

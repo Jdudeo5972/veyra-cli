@@ -1,6 +1,6 @@
 # Veyra
 
-`veyra` is a lightweight Python CLI for running local ONNX and Transformers causal language models. It opens a polished REPL with slash commands, history, autocomplete, autosuggestions, and streaming output.
+`veyra` is a lightweight Python CLI for running local ONNX and Transformers language models. It opens a polished REPL with slash commands, history, autocomplete, autosuggestions, and streaming output.
 
 ## Install
 
@@ -249,7 +249,7 @@ Prompt history is stored at `~/.local/state/veyra/history.txt`.
 
 ## Model Architecture
 
-Veyra treats architecture as metadata. ONNX models use graph inputs and outputs as the source of truth wherever possible; Transformers models use `AutoModelForCausalLM`, the model config, native KV caching, and the tokenizer's chat template.
+Veyra treats architecture as metadata. ONNX models use graph inputs and outputs as the source of truth wherever possible. Transformers models select `AutoModelForCausalLM` or `AutoModelForSeq2SeqLM` from `config.json`, use native KV caching, and honor the tokenizer's chat template.
 
 Currently tested support includes:
 
@@ -259,7 +259,10 @@ Currently tested support includes:
 - split Qwen3.5/Next-style exports using `inputs_embeds`, `embed_tokens.onnx`, and recurrent/conv cache state
 - SmolLM2-style cached exports
 - Safetensors causal language models supported by Transformers `AutoModelForCausalLM`
+- Safetensors encoder-decoder models supported by Transformers `AutoModelForSeq2SeqLM`
 - standalone `chat_template.jinja` files used by Veyra instruct models
+
+Encoder-decoder models default to Base mode unless their tokenizer includes a chat template. Their encoder context limit applies to the input prompt; `/tokens` controls the separate decoder output budget.
 
 Unsupported required inputs are reported clearly by `veyra inspect PATH`.
 
@@ -274,7 +277,7 @@ pipx install git+https://github.com/Jdudeo5972/veyra-cli.git
 
 ## Versioning
 
-Veyra uses calendar versions in `YEAR.MONTH.DD` format, displayed and tagged with a leading `v`, such as `v2026.10.02`. Additional releases on the same day append a counter, such as `v2026.10.02.1`.
+Veyra uses calendar versions in `YEAR.MONTH.DD` format, displayed and tagged with a leading `v`, such as `v2026.10.04`. Additional releases on the same day append a counter, such as `v2026.10.04.1`.
 
 ## License
 

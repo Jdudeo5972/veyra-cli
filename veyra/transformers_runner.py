@@ -10,11 +10,11 @@ from .prompts import format_prompt
 from .runner import COMMON_STOP_TOKENS, model_context_length, sample_next_token
 
 
-class TransformersCausalLMRunner:
+class TransformersRunner:
     def __init__(self, model_dir: str | Path, device: str = "cpu", trust_remote_code: bool = False) -> None:
         try:
             import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
+            from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
         except ImportError as exc:
             raise RuntimeError(
                 "Transformers models require the optional runtime. Install it with "
@@ -36,6 +36,12 @@ class TransformersCausalLMRunner:
         self.device = "cpu"
         self.config = self._read_json("config.json")
         self.tokenizer_config = self._read_json("tokenizer_config.json")
+        auto_config = AutoConfig.from_pretrained(
+            self.model_dir,
+            local_files_only=True,
+            trust_remote_code=trust_remote_code,
+        )
+        self.is_encoder_decoder = bool(getattr(auto_config, "is_encoder_decoder", False))
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_dir,
             local_files_only=True,
@@ -44,7 +50,8 @@ class TransformersCausalLMRunner:
         template_path = self.model_dir / "chat_template.jinja"
         if template_path.exists():
             self.tokenizer.chat_template = template_path.read_text(encoding="utf-8")
-        self.model = AutoModelForCausalLM.from_pretrained(
+        model_class = AutoModelForSeq2SeqLM if self.is_encoder_decoder else AutoModelForCausalLM
+        self.model = model_class.from_pretrained(
             self.model_dir,
             local_files_only=True,
             trust_remote_code=trust_remote_code,
@@ -77,7 +84,7 @@ class TransformersCausalLMRunner:
         return self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
     def token_count(self, text: str) -> int:
-        return len(self.tokenizer.encode(text, add_special_tokens=False))
+        return len(self.tokenizer.encode(text, add_special_tokens=self.is_encoder_decoder))
 
     def generate(
         self,
@@ -91,18 +98,59 @@ class TransformersCausalLMRunner:
         context_length: int | None = None,
     ) -> Iterator[str]:
         torch = self.torch
-        encoded = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
+        encoded = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            add_special_tokens=self.is_encoder_decoder,
+        )
         input_ids = encoded["input_ids"].to(self.device)
         attention_mask = encoded.get("attention_mask", torch.ones_like(input_ids)).to(self.device)
         prompt_len = int(input_ids.shape[1])
         limit = int(context_length) if context_length is not None else self.max_context_length
         if self.max_context_length and limit and limit > self.max_context_length:
             raise ValueError(f"Context length {limit} exceeds this model's limit of {self.max_context_length}.")
-        if limit and prompt_len + max(0, int(max_new_tokens)) > limit:
-            raise ValueError(
-                f"Prompt ({prompt_len} tokens) plus output budget ({max_new_tokens}) exceeds context length {limit}."
-            )
+        required = prompt_len if self.is_encoder_decoder else prompt_len + max(0, int(max_new_tokens))
+        if limit and required > limit:
+            detail = f"Prompt ({prompt_len} tokens)"
+            if not self.is_encoder_decoder:
+                detail += f" plus output budget ({max_new_tokens})"
+            raise ValueError(f"{detail} exceeds context length {limit}.")
 
+        if self.is_encoder_decoder:
+            yield from self._generate_seq2seq(
+                input_ids,
+                attention_mask,
+                max_new_tokens,
+                temperature,
+                top_k,
+                top_p,
+                repetition_penalty,
+                seed,
+            )
+            return
+        yield from self._generate_causal(
+            input_ids,
+            attention_mask,
+            max_new_tokens,
+            temperature,
+            top_k,
+            top_p,
+            repetition_penalty,
+            seed,
+        )
+
+    def _generate_causal(
+        self,
+        input_ids,
+        attention_mask,
+        max_new_tokens: int,
+        temperature: float,
+        top_k: int,
+        top_p: float,
+        repetition_penalty: float,
+        seed: int | None,
+    ) -> Iterator[str]:
+        torch = self.torch
         generated: list[int] = []
         previous_text = ""
         rng = np.random.default_rng(seed)
@@ -140,6 +188,74 @@ class TransformersCausalLMRunner:
                 if delta:
                     yield delta
 
+    def _generate_seq2seq(
+        self,
+        input_ids,
+        attention_mask,
+        max_new_tokens: int,
+        temperature: float,
+        top_k: int,
+        top_p: float,
+        repetition_penalty: float,
+        seed: int | None,
+    ) -> Iterator[str]:
+        torch = self.torch
+        start_id = self._decoder_start_id()
+        decoder_ids = torch.tensor([[start_id]], dtype=input_ids.dtype, device=self.device)
+        generated: list[int] = []
+        previous_text = ""
+        rng = np.random.default_rng(seed)
+        past = None
+        eos_ids = self._eos_ids()
+        with torch.inference_mode():
+            encoder_outputs = self.model.get_encoder()(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                return_dict=True,
+            )
+            for _ in range(max(0, int(max_new_tokens))):
+                step_ids = decoder_ids if past is None else decoder_ids[:, -1:]
+                outputs = self.model(
+                    encoder_outputs=encoder_outputs,
+                    attention_mask=attention_mask,
+                    decoder_input_ids=step_ids,
+                    past_key_values=past,
+                    use_cache=True,
+                )
+                past = getattr(outputs, "past_key_values", None)
+                logits = outputs.logits[0, -1].float().cpu().numpy().astype(np.float64)
+                next_id = sample_next_token(
+                    logits,
+                    generated,
+                    temperature=float(temperature),
+                    top_k=int(top_k),
+                    top_p=float(top_p),
+                    repetition_penalty=float(repetition_penalty),
+                    rng=rng,
+                )
+                if next_id in eos_ids:
+                    break
+                generated.append(next_id)
+                next_tensor = torch.tensor([[next_id]], dtype=decoder_ids.dtype, device=self.device)
+                decoder_ids = torch.cat((decoder_ids, next_tensor), dim=1)
+                text = self.tokenizer.decode(generated, skip_special_tokens=True)
+                delta = (
+                    text[len(previous_text) :]
+                    if text.startswith(previous_text)
+                    else self.tokenizer.decode([next_id], skip_special_tokens=True)
+                )
+                previous_text = text
+                if delta:
+                    yield delta
+
+    def _decoder_start_id(self) -> int:
+        for source in (getattr(self.model, "generation_config", None), self.model.config, self.tokenizer):
+            for field in ("decoder_start_token_id", "bos_token_id", "pad_token_id"):
+                value = getattr(source, field, None)
+                if isinstance(value, int):
+                    return value
+        raise RuntimeError("Seq2Seq model does not define decoder_start_token_id, bos_token_id, or pad_token_id.")
+
     def _eos_ids(self) -> set[int]:
         values: list[int | None] = []
         for value in (
@@ -158,3 +274,6 @@ class TransformersCausalLMRunner:
                 return json.load(handle)
         except (OSError, json.JSONDecodeError):
             return {}
+
+
+TransformersCausalLMRunner = TransformersRunner

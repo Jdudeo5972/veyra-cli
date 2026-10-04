@@ -150,7 +150,12 @@ def registry_entry(
     config = _read_json(root / "config.json")
     tokenizer_config = _read_json(root / "tokenizer_config.json")
     has_template = (root / "chat_template.jinja").exists() or bool(tokenizer_config.get("chat_template"))
-    mode = "template" if has_template else infer_prompt_mode(config, tokenizer_config)
+    if has_template:
+        mode = "template"
+    elif config.get("is_encoder_decoder"):
+        mode = "base"
+    else:
+        mode = infer_prompt_mode(config, tokenizer_config)
     architectures = config.get("architectures") or []
     model_type = config.get("model_type") or (architectures[0] if architectures else "unknown")
     selected_onnx = None

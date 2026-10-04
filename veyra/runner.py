@@ -577,9 +577,9 @@ def device_install_hint(name: str | None) -> str:
 def create_runner(entry: dict[str, Any], device: str = "cpu"):
     runtime = str(entry.get("runtime", "onnx")).lower()
     if runtime == "transformers":
-        from .transformers_runner import TransformersCausalLMRunner
+        from .transformers_runner import TransformersRunner
 
-        return TransformersCausalLMRunner(
+        return TransformersRunner(
             entry["path"],
             device=device,
             trust_remote_code=bool(entry.get("trust_remote_code", False)),

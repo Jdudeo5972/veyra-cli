@@ -20,7 +20,7 @@ from .shell import VeyraShell, find_model_dirs, format_transformers_inspection, 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="veyra", description="Run local ONNX and Transformers causal language models.")
+    parser = argparse.ArgumentParser(prog="veyra", description="Run local ONNX and Transformers language models.")
     parser.add_argument("prompt", nargs="?", help="Prompt text to run, or a subcommand.")
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     parser.add_argument("--no-load", action="store_true", help="Do not autoload the current model in the shell.")
