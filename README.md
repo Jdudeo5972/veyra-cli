@@ -84,11 +84,15 @@ During generation, Ctrl+C stops generation. On Windows terminals, double-tapping
 
 Repositories may contain root-level Safetensors weights and ONNX exports in `onnx/`. Veyra shows both runtime choices, recommends a lightweight ONNX variant by default when one exists, and downloads only the selected weight format plus tokenizer/config metadata.
 
-Sign in before fetching private models:
+Sign in before fetching private or gated models:
 
 ```bash
-hf auth login
+veyra auth login
 ```
+
+The token is entered through a masked prompt, is never placed in Veyra's config or command history, and is stored by `huggingface_hub` in its standard local token store. Veyra rejects classic write tokens and fine-grained tokens with detected write permissions, and its Hub integration only lists and downloads files. Create either a read token or, preferably, a fine-grained token granting only read access to the models you need at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+
+For gated models, first accept the model's access terms in your browser. Then use `veyra auth status` to check the active account and permission without displaying the token. `veyra auth logout` removes the active saved Hugging Face credential. An `HF_TOKEN` environment variable takes precedence over saved credentials; Veyra reports this and will not attempt to overwrite or remove it.
 
 Compatible repositories must include a root-level `tokenizer.json` and either an `.onnx` or `.safetensors` model. Veyra reports a clear error instead of guessing or borrowing a tokenizer from another model.
 
@@ -109,6 +113,7 @@ Core:
 Models:
 
 ```text
+/hf [status|login|logout]
 /model
 /model list
 /model use NAME

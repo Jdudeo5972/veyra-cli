@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import importlib.metadata
 import json
 import os
@@ -15,6 +16,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 
 from . import __version__
+from .auth import hf_auth_status, login_hf_read_only, logout_hf
 from .chat_store import ChatStore
 from .completion import VeyraCompleter
 from .hf import (
@@ -322,6 +324,8 @@ class VeyraShell:
             self.clear_visible_screen(force=True)
         elif cmd == "/model":
             self.model_command(args)
+        elif cmd in {"/hf", "/auth"}:
+            self.hf_command(args)
         elif cmd == "/mode":
             self.mode_command(args)
         elif cmd == "/theme":
@@ -350,6 +354,7 @@ class VeyraShell:
     def help(self) -> None:
         rows = [
             ("/model", "[list|use|fetch|refresh|update|test|add|inspect|info|remove]"),
+            ("/hf", "[status|login|logout]"),
             ("/mode", "[base|template|chatml|qwen|gemma|mistral|llama3]"),
             ("/theme", "[list|veyra|warm|red|pink|lime|green|blue|cyan|purple|orange|gray|rainbow|mono]"),
             ("/profile", "[show|name NAME|mode MODE]"),
@@ -364,6 +369,60 @@ class VeyraShell:
         ]
         for command, rest in rows:
             print(self.theme.text("command", command) + (" " + rest if rest else ""))
+
+    def hf_command(self, args: list[str]) -> None:
+        action = args[0].lower() if args else "status"
+        if action == "status":
+            self.print_hf_status()
+            return
+        if action == "login":
+            self.warn("Create a read or fine-grained read token at https://huggingface.co/settings/tokens")
+            try:
+                status = login_hf_read_only(getpass.getpass("HF read token: "))
+            except (EOFError, KeyboardInterrupt):
+                print("")
+                self.warn("Login cancelled.")
+                return
+            except Exception as exc:
+                self.error(f"Hugging Face login failed: {exc}")
+                return
+            self.success(f"Hugging Face login: {status['username']} ({self.hf_role_label(status)})")
+            return
+        if action == "logout":
+            try:
+                logout_hf()
+            except Exception as exc:
+                self.error(f"Hugging Face logout failed: {exc}")
+                return
+            self.success("Hugging Face logout complete.")
+            return
+        self.warn("Usage: /hf [status|login|logout]")
+
+    def print_hf_status(self) -> None:
+        try:
+            status = hf_auth_status()
+        except Exception as exc:
+            self.error(f"Hugging Face status failed: {exc}")
+            return
+        if not status["authenticated"]:
+            self.warn("Hugging Face: not signed in")
+            self.error(status["error"])
+            return
+        print(self.theme.text("label", "account    ") + self.theme.text("value", status["username"]))
+        print(self.theme.text("label", "token      ") + self.theme.text("value", status["token_name"]))
+        role = self.hf_role_label(status)
+        role_style = "success" if status["read_only"] else "warning"
+        print(self.theme.text("label", "permission ") + self.theme.text(role_style, role))
+        print(self.theme.text("label", "source     ") + self.theme.text("value", status["source"]))
+
+    @staticmethod
+    def hf_role_label(status: dict) -> str:
+        role = str(status.get("role") or "unknown")
+        if role.casefold() == "read":
+            return "read-only"
+        if role.casefold() == "finegrained" and status.get("read_only"):
+            return "fine-grained read-only"
+        return role
 
     def status(self, show_chat: bool = True) -> None:
         if not models(self.config):

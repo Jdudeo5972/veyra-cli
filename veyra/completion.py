@@ -6,6 +6,7 @@ from prompt_toolkit.document import Document
 
 TOP = {
     "/model": "Show or change current model",
+    "/hf": "Manage Hugging Face authentication",
     "/mode": "Show or change prompt mode",
     "/chat": "Manage saved chats",
     "/theme": "Change CLI color theme",
@@ -90,6 +91,11 @@ CHAT = {
     "path": "Show chat file path",
 }
 MODEL_UPDATE = {"all": "Update all Hugging Face models"}
+HF_AUTH = {
+    "status": "Show Hugging Face login status",
+    "login": "Store a read-only Hugging Face token",
+    "logout": "Remove saved Hugging Face tokens",
+}
 CHAT_EXPORT = {"markdown": "Export current chat as Markdown"}
 
 
@@ -138,6 +144,8 @@ class VeyraCompleter(Completer):
                     current,
                     start,
                 )
+        elif command == "/hf" and len(parts) == 2:
+            yield from _dict_completions(HF_AUTH, current, start)
         elif command == "/mode" and len(parts) == 2:
             yield from _dict_completions(MODE, current, start)
         elif command == "/autoload" and len(parts) == 2:

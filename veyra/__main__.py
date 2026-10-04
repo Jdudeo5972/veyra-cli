@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from .hf import (
     registry_entry,
     variant_name,
 )
+from .auth import hf_auth_status, login_hf_read_only, logout_hf
 from .inspect import format_inspection, inspect_model
 from .registry import load_config, register_model, safe_model_name
 from .runner import create_runner
@@ -41,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
         return models_cmd()
     if command == "fetch":
         return fetch_cmd(argv[1] if len(argv) >= 2 else None)
+    if command == "auth":
+        return auth_cmd(argv[1:])
     if command == "add":
         return add_cmd(argv[1:])
     if command == "inspect":
@@ -95,6 +99,49 @@ def models_cmd() -> int:
         mark = "*" if name == current else " "
         print(f"{mark} {name} ({entry.get('source', 'unknown')}, {entry.get('runtime', 'onnx')})")
     return 0
+
+
+def auth_cmd(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="veyra auth")
+    parser.add_argument("action", nargs="?", choices=("status", "login", "logout"), default="status")
+    args = parser.parse_args(argv)
+    try:
+        if args.action == "login":
+            if not sys.stdin.isatty():
+                print("Login requires an interactive terminal so the token can be entered securely.")
+                return 2
+            print("Create a read or fine-grained read token at https://huggingface.co/settings/tokens")
+            status = login_hf_read_only(getpass.getpass("HF read token: "))
+            print(f"Signed in to Hugging Face as {status['username']} ({auth_role_label(status)}).")
+            return 0
+        if args.action == "logout":
+            logout_hf()
+            print("Hugging Face logout complete.")
+            return 0
+        status = hf_auth_status()
+        if not status["authenticated"]:
+            print(f"Hugging Face: not signed in. {status['error']}")
+            return 1
+        print(f"account: {status['username']}")
+        print(f"token: {status['token_name']}")
+        print(f"permission: {auth_role_label(status)}")
+        print(f"source: {status['source']}")
+        return 0
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return 130
+    except Exception as exc:
+        print(f"Hugging Face authentication failed: {exc}")
+        return 1
+
+
+def auth_role_label(status: dict) -> str:
+    role = str(status.get("role") or "unknown")
+    if role.casefold() == "read":
+        return "read-only"
+    if role.casefold() == "finegrained" and status.get("read_only"):
+        return "fine-grained read-only"
+    return role
 
 
 def fetch_cmd(repo_id: str | None = None) -> int:

@@ -28,7 +28,10 @@ def list_veyra_models() -> list[dict[str, Any]]:
         raise RuntimeError("huggingface_hub is required for fetching models.") from exc
 
     api = HfApi()
-    repos = list(api.list_models(author=HF_ORG, full=True))
+    try:
+        repos = list(api.list_models(author=HF_ORG, full=True))
+    except Exception as exc:
+        raise RuntimeError(hub_access_error(HF_ORG, exc)) from exc
     choices: list[dict[str, Any]] = []
     for repo in repos:
         repo_id = repo.modelId
@@ -63,7 +66,7 @@ def get_hf_model(repo_id: str, revision: str = "main") -> dict[str, Any]:
     try:
         files = list_repo_files(repo_id, revision=revision)
     except Exception as exc:
-        raise RuntimeError(f"Could not access Hugging Face model {repo_id}: {exc}") from exc
+        raise RuntimeError(hub_access_error(repo_id, exc)) from exc
     if "tokenizer.json" not in files:
         raise RuntimeError(
             f"{repo_id} does not contain tokenizer.json. Veyra requires a fast tokenizer.json beside the model weights."
@@ -102,7 +105,10 @@ def download_model(
     except ImportError as exc:
         raise RuntimeError("huggingface_hub is required for fetching models.") from exc
 
-    files = list_repo_files(repo_id, revision=revision)
+    try:
+        files = list_repo_files(repo_id, revision=revision)
+    except Exception as exc:
+        raise RuntimeError(hub_access_error(repo_id, exc)) from exc
     if "tokenizer.json" not in files:
         raise RuntimeError(f"{repo_id} does not contain tokenizer.json.")
     available_onnx = onnx_variants(files)
@@ -123,12 +129,15 @@ def download_model(
 
     name = fetched_model_name(repo_id, onnx_file, len(available_onnx), runtime=runtime)
     target = MODELS_DIR / name
-    path = snapshot_download(
-        repo_id=repo_id,
-        revision=revision,
-        local_dir=target,
-        allow_patterns=allow_patterns,
-    )
+    try:
+        path = snapshot_download(
+            repo_id=repo_id,
+            revision=revision,
+            local_dir=target,
+            allow_patterns=allow_patterns,
+        )
+    except Exception as exc:
+        raise RuntimeError(hub_access_error(repo_id, exc)) from exc
     commit = None
     try:
         info = HfApi().model_info(repo_id, revision=revision)
@@ -226,6 +235,22 @@ def fetched_model_name(
 def _is_quantized(path: str) -> bool:
     name = PurePosixPath(path).stem.casefold()
     return any(marker in name for marker in ("int8", "uint8", "quant", "q4", "bnb"))
+
+
+def hub_access_error(repo_id: str, exc: Exception) -> str:
+    message = str(exc)
+    lowered = message.casefold()
+    if "401" in lowered or "unauthorized" in lowered or "invalid user token" in lowered:
+        return (
+            f"Could not authenticate while accessing {repo_id}. Use `veyra auth login` or `/hf login` "
+            "with a read-only Hugging Face token."
+        )
+    if "403" in lowered or "forbidden" in lowered or "gated" in lowered or "access denied" in lowered:
+        return (
+            f"Access to {repo_id} was denied. Accept the model's access terms on Hugging Face, then grant "
+            "your read-only token access to that model."
+        )
+    return f"Could not access Hugging Face model {repo_id}: {message}"
 
 
 def _onnx_download_files(files: list[str], selected: str, variants: list[str]) -> list[str]:
