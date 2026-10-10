@@ -46,7 +46,13 @@ class CacheOutputError(RuntimeError):
 
 
 class OnnxCausalLMRunner:
-    def __init__(self, model_dir: str | Path, threads: int = 2, device: str = "cpu") -> None:
+    def __init__(
+        self,
+        model_dir: str | Path,
+        threads: int = 2,
+        device: str = "cpu",
+        trust_remote_code: bool = False,
+    ) -> None:
         try:
             import onnxruntime as ort
         except ImportError as exc:
@@ -62,6 +68,7 @@ class OnnxCausalLMRunner:
         self.tokenizer_config = self._read_json("tokenizer_config.json")
         self.tokenizer = Tokenizer.from_file(str(self.tokenizer_path))
         self.template_tokenizer = None
+        self.trust_remote_code = bool(trust_remote_code)
         self.max_context_length = model_context_length(self.config, self.tokenizer_config)
         self.eos_ids = self._eos_ids()
         self.embed_session = None
@@ -391,7 +398,7 @@ class OnnxCausalLMRunner:
                 self.template_tokenizer = AutoTokenizer.from_pretrained(
                     self.model_dir,
                     local_files_only=True,
-                    trust_remote_code=False,
+                    trust_remote_code=self.trust_remote_code,
                 )
                 template_path = self.model_dir / "chat_template.jinja"
                 if template_path.exists():
@@ -587,4 +594,8 @@ def create_runner(entry: dict[str, Any], device: str = "cpu"):
             device=device,
             trust_remote_code=bool(entry.get("trust_remote_code", False)),
         )
-    return OnnxCausalLMRunner(entry["path"], device=device)
+    return OnnxCausalLMRunner(
+        entry["path"],
+        device=device,
+        trust_remote_code=bool(entry.get("trust_remote_code", False)),
+    )

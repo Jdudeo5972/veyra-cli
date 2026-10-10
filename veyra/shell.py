@@ -353,7 +353,7 @@ class VeyraShell:
 
     def help(self) -> None:
         rows = [
-            ("/model", "[list|use|fetch|refresh|update|test|add|inspect|info|remove]"),
+            ("/model", "[list|use|fetch|refresh|update|test|add|inspect|info|trust|remove]"),
             ("/hf", "[status|login|logout]"),
             ("/mode", "[base|template|chatml|qwen|gemma|mistral|llama3]"),
             ("/theme", "[list|veyra|warm|red|pink|lime|green|blue|cyan|purple|orange|gray|rainbow|mono]"),
@@ -574,7 +574,10 @@ class VeyraShell:
         elif action == "use" and len(args) >= 2:
             self.use_model(args[1])
         elif action == "fetch":
-            self.fetch_model(args[1] if len(args) >= 2 else None)
+            fetch_args = args[1:]
+            trust_remote_code = "--trust-remote-code" in fetch_args
+            repo_id = next((value for value in fetch_args if not value.startswith("--")), None)
+            self.fetch_model(repo_id, trust_remote_code=trust_remote_code)
         elif action == "refresh":
             self.remote_list()
         elif action == "update":
@@ -582,15 +585,28 @@ class VeyraShell:
         elif action == "test":
             self.model_test(args[1] if len(args) >= 2 else None)
         elif action == "add" and len(args) >= 2:
-            self.add_model(args[1], None, args[2] if len(args) >= 3 else "auto")
+            add_args = args[2:]
+            runtime = next((value for value in add_args if value in {"auto", "onnx", "transformers"}), "auto")
+            self.add_model(
+                args[1],
+                None,
+                runtime,
+                trust_remote_code="--trust-remote-code" in add_args,
+            )
         elif action == "inspect":
             self.inspect_current()
         elif action == "info":
             self.model_info(args[1] if len(args) >= 2 else None)
+        elif action == "trust":
+            self.model_trust_command(args[1:])
         elif action == "remove" and len(args) >= 2:
             self.remove_model_command(args[1])
         else:
-            self.warn("Usage: /model [list|use NAME|fetch [REPO_ID]|refresh|update [all]|test [NAME]|add PATH [onnx|transformers]|inspect|info [NAME]|remove NAME]")
+            self.warn(
+                "Usage: /model [list|use NAME|fetch [REPO_ID] [--trust-remote-code]|refresh|update [all]|"
+                "test [NAME]|add PATH [onnx|transformers] [--trust-remote-code]|inspect|info [NAME]|"
+                "trust [on|off]|remove NAME]"
+            )
 
     def list_models(self) -> None:
         if not models(self.config):
@@ -628,7 +644,7 @@ class VeyraShell:
         if self.load_current_model():
             self.success(f"Using {name}.")
 
-    def fetch_model(self, repo_id: str | None = None) -> None:
+    def fetch_model(self, repo_id: str | None = None, trust_remote_code: bool = False) -> None:
         if repo_id:
             try:
                 selected = get_hf_model(repo_id)
@@ -657,6 +673,7 @@ class VeyraShell:
                 commit=commit,
                 onnx_file=onnx_file,
                 runtime=runtime,
+                trust_remote_code=trust_remote_code,
             )
             name = fetched_model_name(repo_id, onnx_file, len(selected["onnx_files"]), runtime=runtime)
             register_model(self.config, name, entry)
@@ -739,6 +756,7 @@ class VeyraShell:
                     commit=commit,
                     onnx_file=onnx_file,
                     runtime=runtime,
+                    trust_remote_code=bool(entry.get("trust_remote_code", False)),
                 )
                 if entry.get("profile"):
                     refreshed["profile"] = entry["profile"]
@@ -748,11 +766,21 @@ class VeyraShell:
                 self.error(f"Could not update {name}: {exc}")
         save_config(self.config)
 
-    def add_model(self, path: str, name: str | None, runtime: str = "auto") -> None:
+    def add_model(
+        self,
+        path: str,
+        name: str | None,
+        runtime: str = "auto",
+        trust_remote_code: bool = False,
+    ) -> None:
         added = False
         for candidate in find_model_dirs(Path(path).expanduser()):
             try:
-                entry = make_local_model_entry(candidate, runtime=runtime)
+                entry = make_local_model_entry(
+                    candidate,
+                    runtime=runtime,
+                    trust_remote_code=trust_remote_code,
+                )
                 model_name = name or safe_model_name(candidate.name)
                 if name and added:
                     model_name = safe_model_name(candidate.name)
@@ -767,7 +795,11 @@ class VeyraShell:
             return
         try:
             model_name = name or safe_model_name(Path(path).expanduser().resolve().name)
-            entry = make_local_model_entry(Path(path).expanduser().resolve(), runtime=runtime)
+            entry = make_local_model_entry(
+                Path(path).expanduser().resolve(),
+                runtime=runtime,
+                trust_remote_code=trust_remote_code,
+            )
             register_model(self.config, model_name, entry)
             self.runner = None
             self.load_current_model()
@@ -847,11 +879,33 @@ class VeyraShell:
             "context": str(limit or "unknown"),
             "kv cache": cache,
             "supported": supported,
+            "custom code": "trusted" if entry.get("trust_remote_code", False) else "blocked",
             "mode": entry.get("profile", {}).get("mode", entry.get("mode", "chatml")),
             "generation": self.generation_summary(entry),
         }
         for label, value in rows.items():
             print(self.theme.text("label", label.ljust(13)) + self.theme.text("value", str(value)))
+
+    def model_trust_command(self, args: list[str]) -> None:
+        name, entry = current_model_entry(self.config)
+        if not entry:
+            self.warn("No current model selected.")
+            return
+        if not args:
+            state = "on" if entry.get("trust_remote_code", False) else "off"
+            print(self.theme.text("label", "custom code ") + self.theme.text("value", state))
+            return
+        state = args[0].lower()
+        if state not in {"on", "off"}:
+            self.warn("Usage: /model trust [on|off]")
+            return
+        enabled = state == "on"
+        entry["trust_remote_code"] = enabled
+        save_config(self.config)
+        self.runner = None
+        self.success(f"custom code: {state} ({name})")
+        if not self.load_current_model():
+            self.warn("The setting was saved, but the model could not be loaded.")
 
     def mode_command(self, args: list[str]) -> None:
         if not args:
@@ -1214,7 +1268,7 @@ def info_config(model_dir: Path, name: str = "config.json") -> dict:
         return {}
 
 
-def make_local_entry(info) -> dict:
+def make_local_entry(info, trust_remote_code: bool = False) -> dict:
     mode = local_prompt_mode(info.model_dir)
     return {
         "source": "local",
@@ -1223,6 +1277,7 @@ def make_local_entry(info) -> dict:
         "downloaded_commit": None,
         "path": str(info.model_dir),
         "runtime": "onnx",
+        "trust_remote_code": bool(trust_remote_code),
         "architecture": info.model_type or info.architecture or "unknown",
         "mode": mode,
         "profile": {"mode": mode, "assistant_name": "Veyra"},
@@ -1230,7 +1285,11 @@ def make_local_entry(info) -> dict:
     }
 
 
-def make_local_model_entry(model_dir: Path, runtime: str = "auto") -> dict:
+def make_local_model_entry(
+    model_dir: Path,
+    runtime: str = "auto",
+    trust_remote_code: bool = False,
+) -> dict:
     model_dir = model_dir.expanduser().resolve()
     if not (model_dir / "tokenizer.json").exists():
         raise FileNotFoundError(f"Missing tokenizer.json in {model_dir}")
@@ -1246,7 +1305,7 @@ def make_local_model_entry(model_dir: Path, runtime: str = "auto") -> dict:
         info = inspect_model(model_dir)
         if not info.supported:
             raise RuntimeError(format_inspection(info))
-        return make_local_entry(info)
+        return make_local_entry(info, trust_remote_code=trust_remote_code)
     weights = list(model_dir.glob("*.safetensors"))
     if not weights:
         raise FileNotFoundError(f"No .onnx or .safetensors model files found in {model_dir}")
@@ -1261,7 +1320,7 @@ def make_local_model_entry(model_dir: Path, runtime: str = "auto") -> dict:
         "downloaded_commit": None,
         "path": str(model_dir),
         "runtime": "transformers",
-        "trust_remote_code": False,
+        "trust_remote_code": bool(trust_remote_code),
         "architecture": str(architecture).lower(),
         "mode": mode,
         "profile": {"mode": mode, "assistant_name": "Veyra"},
@@ -1286,6 +1345,7 @@ def format_transformers_inspection(model_dir: Path) -> str:
     config = info_config(model_dir)
     architectures = config.get("architectures") or []
     architecture = config.get("model_type") or (architectures[0] if architectures else "unknown")
+    custom_code = "declared" if config.get("auto_map") or list(model_dir.rglob("*.py")) else "not declared"
     model_class = "AutoModelForSeq2SeqLM" if config.get("is_encoder_decoder") else "AutoModelForCausalLM"
     template = model_dir / "chat_template.jinja"
     lines = [
@@ -1294,6 +1354,7 @@ def format_transformers_inspection(model_dir: Path) -> str:
         f"Tokenizer: {tokenizer}",
         f"Architecture: {architecture}",
         f"Model class: {model_class}",
+        f"Custom code: {custom_code}",
         f"Chat template: {template if template.exists() else 'tokenizer config or none'}",
         f"Status: {'supported' if weights and tokenizer.exists() else 'unsupported'}",
     ]

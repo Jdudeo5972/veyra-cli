@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     if command == "models":
         return models_cmd()
     if command == "fetch":
-        return fetch_cmd(argv[1] if len(argv) >= 2 else None)
+        return fetch_cmd(argv[1:])
     if command == "auth":
         return auth_cmd(argv[1:])
     if command == "add":
@@ -144,7 +144,16 @@ def auth_role_label(status: dict) -> str:
     return role
 
 
-def fetch_cmd(repo_id: str | None = None) -> int:
+def fetch_cmd(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="veyra fetch")
+    parser.add_argument("repo_id", nargs="?")
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Allow Python code supplied by the model repository to run locally.",
+    )
+    args = parser.parse_args(argv)
+    repo_id = args.repo_id
     if repo_id:
         try:
             selected = get_hf_model(repo_id)
@@ -181,6 +190,7 @@ def fetch_cmd(repo_id: str | None = None) -> int:
             commit=commit,
             onnx_file=onnx_file,
             runtime=runtime,
+            trust_remote_code=args.trust_remote_code,
         )
         register_model(config, name, entry)
     except Exception as exc:
@@ -224,6 +234,11 @@ def add_cmd(argv: list[str]) -> int:
     parser.add_argument("path")
     parser.add_argument("--name")
     parser.add_argument("--runtime", choices=("auto", "onnx", "transformers"), default="auto")
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Allow Python code supplied by this model to run locally.",
+    )
     args = parser.parse_args(argv)
     root = Path(args.path).expanduser()
     scanned = find_model_dirs(root)
@@ -231,7 +246,11 @@ def add_cmd(argv: list[str]) -> int:
         config = load_config()
         for candidate in scanned:
             try:
-                entry = make_local_model_entry(candidate, runtime=args.runtime)
+                entry = make_local_model_entry(
+                    candidate,
+                    runtime=args.runtime,
+                    trust_remote_code=args.trust_remote_code,
+                )
                 name = safe_model_name(candidate.name)
                 register_model(config, name, entry)
                 print(f"Added {name}.")
@@ -241,7 +260,11 @@ def add_cmd(argv: list[str]) -> int:
     config = load_config()
     model_dir = Path(args.path).expanduser().resolve()
     name = args.name or safe_model_name(model_dir.name)
-    entry = make_local_model_entry(model_dir, runtime=args.runtime)
+    entry = make_local_model_entry(
+        model_dir,
+        runtime=args.runtime,
+        trust_remote_code=args.trust_remote_code,
+    )
     register_model(config, name, entry)
     print(f"Added and selected {name}.")
     return 0

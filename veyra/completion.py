@@ -42,6 +42,7 @@ MODEL = {
     "add": "Add local ONNX model",
     "inspect": "Inspect current model",
     "info": "Show model metadata and profile",
+    "trust": "Allow or block model custom code",
     "remove": "Remove model from registry",
 }
 
@@ -138,6 +139,12 @@ class VeyraCompleter(Completer):
                 for name in self.model_names_cb():
                     if name.startswith(current):
                         yield Completion(name, start_position=start)
+            elif len(parts) == 3 and parts[1] == "trust":
+                yield from _dict_completions(
+                    {"on": "Allow custom model code", "off": "Block custom model code"},
+                    current,
+                    start,
+                )
             elif len(parts) == 4 and parts[1] == "add":
                 yield from _dict_completions(
                     {"onnx": "Use ONNX Runtime", "transformers": "Use Safetensors with Transformers"},

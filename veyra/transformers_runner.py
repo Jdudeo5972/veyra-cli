@@ -36,27 +36,36 @@ class TransformersRunner:
         self.device = "cpu"
         self.config = self._read_json("config.json")
         self.tokenizer_config = self._read_json("tokenizer_config.json")
-        auto_config = AutoConfig.from_pretrained(
-            self.model_dir,
-            local_files_only=True,
-            trust_remote_code=trust_remote_code,
-        )
-        self.is_encoder_decoder = bool(getattr(auto_config, "is_encoder_decoder", False))
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_dir,
-            local_files_only=True,
-            trust_remote_code=trust_remote_code,
-        )
-        template_path = self.model_dir / "chat_template.jinja"
-        if template_path.exists():
-            self.tokenizer.chat_template = template_path.read_text(encoding="utf-8")
-        model_class = AutoModelForSeq2SeqLM if self.is_encoder_decoder else AutoModelForCausalLM
-        self.model = model_class.from_pretrained(
-            self.model_dir,
-            local_files_only=True,
-            trust_remote_code=trust_remote_code,
-            torch_dtype="auto",
-        ).to(self.device)
+        self.trust_remote_code = bool(trust_remote_code)
+        try:
+            auto_config = AutoConfig.from_pretrained(
+                self.model_dir,
+                local_files_only=True,
+                trust_remote_code=self.trust_remote_code,
+            )
+            self.is_encoder_decoder = bool(getattr(auto_config, "is_encoder_decoder", False))
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                self.model_dir,
+                local_files_only=True,
+                trust_remote_code=self.trust_remote_code,
+            )
+            template_path = self.model_dir / "chat_template.jinja"
+            if template_path.exists():
+                self.tokenizer.chat_template = template_path.read_text(encoding="utf-8")
+            model_class = AutoModelForSeq2SeqLM if self.is_encoder_decoder else AutoModelForCausalLM
+            self.model = model_class.from_pretrained(
+                self.model_dir,
+                local_files_only=True,
+                trust_remote_code=self.trust_remote_code,
+                torch_dtype="auto",
+            ).to(self.device)
+        except Exception as exc:
+            if not self.trust_remote_code and (self.config.get("auto_map") or "trust_remote_code" in str(exc)):
+                raise RuntimeError(
+                    "This model requires custom Hugging Face code. Review the repository, then run "
+                    "`/model trust on` or add/fetch it with `--trust-remote-code`."
+                ) from exc
+            raise
         self.model.eval()
         self.max_context_length = model_context_length(self.config, self.tokenizer_config)
         self.uses_cache = bool(getattr(self.model.config, "use_cache", True))

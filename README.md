@@ -32,8 +32,10 @@ uv run veyra
 veyra
 veyra fetch
 veyra fetch owner/model
+veyra fetch owner/model --trust-remote-code
 veyra run "Hello"
 veyra add ./models/foo
+veyra add ./models/foo --runtime transformers --trust-remote-code
 veyra add C:\Users\Jack\Models
 veyra inspect ./models/foo
 veyra models
@@ -49,6 +51,7 @@ Inside the shell:
 /model add PATH
 /model test
 /model info
+/model trust on
 /model remove NAME
 /mode qwen
 /profile name Nova
@@ -86,6 +89,17 @@ For gated models, first accept the model's access terms in your browser. Then us
 
 Compatible repositories must include a root-level `tokenizer.json` and either an `.onnx` or `.safetensors` model. Veyra reports a clear error instead of guessing or borrowing a tokenizer from another model.
 
+### Custom Model Code
+
+Some Hugging Face models define their architecture or tokenizer in Python files stored in the model repository. Veyra blocks that code by default. After reviewing the repository, opt in while fetching or adding the model:
+
+```bash
+veyra fetch owner/model --trust-remote-code
+veyra add ./models/foo --runtime transformers --trust-remote-code
+```
+
+For the selected model, `/model trust on` enables custom code immediately and `/model trust off` blocks it again. The setting is saved per model and preserved by model updates. Custom model code runs locally with your user account's permissions, so only enable it for repositories you trust.
+
 ## Shell Commands
 
 Core:
@@ -107,14 +121,15 @@ Models:
 /model
 /model list
 /model use NAME
-/model fetch [REPO_ID]
+/model fetch [REPO_ID] [--trust-remote-code]
 /model refresh
 /model update
 /model update all
-/model add PATH [onnx|transformers]
+/model add PATH [onnx|transformers] [--trust-remote-code]
 /model inspect
 /model info [NAME]
 /model test [NAME]
+/model trust [on|off]
 /model remove NAME
 ```
 

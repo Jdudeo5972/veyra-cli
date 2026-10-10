@@ -17,6 +17,7 @@ MODEL_METADATA_PATTERNS = [
     "config.json",
     "generation_config.json",
     "*.py",
+    "**/*.py",
 ]
 TRANSFORMERS_WEIGHT_PATTERNS = ["*.safetensors", "*.safetensors.index.json"]
 
@@ -154,6 +155,7 @@ def registry_entry(
     commit: str | None = None,
     onnx_file: str | None = None,
     runtime: str = "onnx",
+    trust_remote_code: bool = False,
 ) -> dict[str, Any]:
     root = Path(path)
     config = _read_json(root / "config.json")
@@ -180,7 +182,7 @@ def registry_entry(
         "onnx_file": selected_onnx,
         "path": str(root.expanduser().resolve()),
         "runtime": runtime,
-        "trust_remote_code": repo_id.lower().startswith(f"{HF_ORG}/"),
+        "trust_remote_code": bool(trust_remote_code),
         "architecture": str(model_type).lower(),
         "mode": mode,
         "profile": {"mode": mode, "assistant_name": "Veyra"},
