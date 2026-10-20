@@ -1,0 +1,118 @@
+Screen {
+    background: $background;
+    color: $foreground;
+}
+#heading {
+    color: $primary;
+    text-style: bold;
+    height: 1;
+    margin: 1 2 0 2;
+}
+#status {
+    height: auto;
+    margin: 1 2 0 2;
+    color: $text-muted;
+}
+#toolbar {
+    height: 3;
+    margin: 0 1;
+}
+#toolbar Button {
+    min-width: 9;
+    width: auto;
+    margin: 0 1 0 0;
+}
+#conversation {
+    height: 1fr;
+    padding: 0 2;
+    border-top: solid $secondary;
+}
+.chat-message {
+    height: auto;
+    margin: 1 0;
+}
+.message-role {
+    color: $accent;
+    text-style: bold;
+    height: 1;
+}
+.message-body {
+    height: auto;
+    margin: 0;
+    padding: 0;
+}
+Markdown {
+    background: transparent;
+    margin: 0;
+    padding: 0;
+}
+MarkdownFence {
+    background: $surface;
+    margin: 1 0;
+}
+.command-output {
+    height: auto;
+    margin: 0 0 1 0;
+}
+#metrics {
+    height: 1;
+    margin: 0 2;
+    color: $text-muted;
+}
+#completions {
+    display: none;
+    height: auto;
+    max-height: 9;
+    margin: 0 2;
+    border: solid $primary-muted;
+}
+#composer-row {
+    height: 3;
+    margin: 0 1;
+}
+#user-label {
+    width: 7;
+    height: 3;
+    content-align: center middle;
+}
+#composer {
+    width: 1fr;
+}
+Footer {
+    background: $surface;
+}
+ModalScreen {
+    align: center middle;
+    background: $background 75%;
+}
+.dialog {
+    width: 76;
+    max-width: 95%;
+    height: 70%;
+    padding: 1 2;
+    background: $surface;
+    border: round $primary;
+}
+.dialog-title {
+    color: $primary;
+    text-style: bold;
+    height: auto;
+    margin-bottom: 1;
+}
+.dialog Input {
+    margin-bottom: 1;
+}
+#picker-options {
+    height: 1fr;
+    border: none;
+}
+.question {
+    height: auto;
+    max-height: 90%;
+}
+.dialog-buttons {
+    height: 3;
+}
+.dialog-buttons Button {
+    margin-right: 1;
+}

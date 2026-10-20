@@ -1,6 +1,6 @@
 # Veyra
 
-`veyra` is a lightweight Python CLI for running local ONNX and Transformers language models. It opens a polished REPL with slash commands, history, autocomplete, autosuggestions, and streaming output.
+`veyra` is a Python CLI for running local ONNX and Transformers language models. It opens a polished REPL with slash commands, history, autocomplete, autosuggestions, and streaming output. `veyra tui` opens an optional full-screen Textual interface.
 
 ## Install
 
@@ -30,6 +30,7 @@ uv run veyra
 
 ```bash
 veyra
+veyra tui
 veyra fetch
 veyra fetch owner/model
 veyra fetch owner/model --trust-remote-code
@@ -70,6 +71,35 @@ Inside the shell:
 `/model add PATH` can point at one model directory or a folder containing multiple model directories. Mixed local folders default to Transformers/Safetensors; use `/model add PATH onnx` or `veyra add PATH --runtime onnx` to select ONNX explicitly. `/model test` runs a one-token smoke test and reports load time, first-token time, total time, and the sampled token. `/model info` shows architecture, runtime, weights, context limit, cache support, and profile metadata.
 
 During generation, Ctrl+C stops generation. On Windows terminals, double-tapping Tab also requests a stop between generated tokens.
+
+## Textual Interface
+
+From a checkout, launch the TUI with:
+
+```bash
+uv sync
+uv run veyra tui
+uv run veyra tui --continue
+uv run veyra tui --no-load
+```
+
+An installed copy uses `veyra tui`. The existing `veyra` REPL remains the default.
+
+The TUI shares the same model registry, generation profiles, themes, history, and autosaved JSONL chats as the REPL. It provides a scrollable conversation with Markdown and highlighted code, a persistent model/status header, and searchable model, chat, and settings pickers. Loading, fetching, and generation run in background workers.
+
+- F2 opens models; F3 opens chats; F4 opens settings.
+- Ctrl+N starts a new chat.
+- Type `/` for commands; Up/Down selects a suggestion, and Tab or Enter completes it. Enter submits a completed command or message.
+- Ctrl+C, Escape, the Stop button, or a double tap of Tab requests a generation stop between model calls. Partial replies are saved.
+- Ctrl+Q or Ctrl+D exits. If a model operation is running, Veyra requests a stop and exits after the current call returns.
+
+`/model` and `/chat` open their pickers. Other slash commands, including `/model fetch`, `/retry`, `/stats`, `/theme`, and `/doctor`, use the existing shell behavior. Interactive fetch choices and Hugging Face token entry appear in dialogs; token input stays masked and is not saved to command history.
+
+For local UI checks without downloading a model:
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
 
 ## Fetching Models
 

@@ -22,7 +22,11 @@ from .shell import VeyraShell, find_model_dirs, format_transformers_inspection, 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="veyra", description="Run local ONNX and Transformers language models.")
+    parser = argparse.ArgumentParser(
+        prog="veyra",
+        description="Run local ONNX and Transformers language models.",
+        epilog="Use `veyra tui` for the Textual interface or `veyra` for the REPL.",
+    )
     parser.add_argument("prompt", nargs="?", help="Prompt text to run, or a subcommand.")
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     parser.add_argument("--no-load", action="store_true", help="Do not autoload the current model in the shell.")
@@ -37,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
         return VeyraShell(args).run()
 
     command = argv[0]
+    if command == "tui":
+        return tui_cmd(argv[1:])
     if command == "run":
         return run_prompt(" ".join(argv[1:]).strip())
     if command == "models":
@@ -56,6 +62,25 @@ def main(argv: list[str] | None = None) -> int:
         args = build_parser().parse_args(argv)
         return VeyraShell(args).run()
     return run_prompt(" ".join(argv))
+
+
+def tui_cmd(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="veyra tui", description="Open the Textual chat interface.")
+    parser.add_argument("--no-load", action="store_true", help="Skip startup model loading.")
+    parser.add_argument("--continue", dest="continue_chat", action="store_true", help="Resume the most recent chat.")
+    args = parser.parse_args(argv)
+    try:
+        from .tui import VeyraApp
+    except ImportError as exc:
+        if exc.name and (exc.name == "textual" or exc.name.startswith("textual.")):
+            print("Textual is missing. Run `uv sync` in this checkout or reinstall Veyra.")
+            return 1
+        raise
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("veyra tui needs an interactive terminal. Use `veyra run` for non-interactive output.")
+        return 2
+    VeyraApp(args).run()
+    return 0
 
 
 def run_prompt(prompt: str) -> int:

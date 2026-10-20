@@ -36,7 +36,7 @@ from .theme import THEMES, get_theme, normalize_theme
 
 
 class VeyraShell:
-    def __init__(self, args: argparse.Namespace) -> None:
+    def __init__(self, args: argparse.Namespace, *, interactive: bool = True) -> None:
         _prefer_utf8_stdio()
         self.args = args
         self.config = load_config()
@@ -51,7 +51,16 @@ class VeyraShell:
         self.kb = KeyBindings()
         self.kb.add("enter")(self._accept_completion_or_line)
         self.kb.add("tab")(self._accept_completion_or_menu)
-        self.session = self._make_session() if sys.stdin.isatty() and sys.stdout.isatty() else None
+        self.session = self._make_session() if interactive and sys.stdin.isatty() and sys.stdout.isatty() else None
+
+    def write_output(self, *values, **kwargs) -> None:
+        print(*values, **kwargs)
+
+    def ask(self, prompt: str) -> str:
+        return input(prompt)
+
+    def ask_secret(self, prompt: str) -> str:
+        return getpass.getpass(prompt)
 
     def _make_session(self) -> PromptSession:
         return PromptSession(
@@ -105,7 +114,7 @@ class VeyraShell:
             try:
                 text = self.read_input()
             except (EOFError, KeyboardInterrupt):
-                print("")
+                self.write_output("")
                 return 0
             text = text.strip()
             if not text:
@@ -134,10 +143,10 @@ class VeyraShell:
             + self.theme.text(border_role, "\u2500" * right_width)
             + self.theme.text(border_role, "\u256e")
         )
-        print(top)
+        self.write_output(top)
         for left, right in self.banner_rows(state):
             self.print_box_row(left, right, left_width, right_width)
-        print(
+        self.write_output(
             self.theme.text(border_role, "\u2570")
             + self.theme.text(border_role, "\u2500" * left_width)
             + self.theme.text(border_role, "\u2534")
@@ -155,7 +164,7 @@ class VeyraShell:
         border = self.theme.text("border", "\u2502")
         left = self.pad_segments(left_segments, left_width)
         right = self.pad_segments(right_segments, right_width)
-        print(f"{border}{left}{border}{right}{border}")
+        self.write_output(f"{border}{left}{border}{right}{border}")
 
     def pad_segments(self, segments: list[tuple[str, str]], width: int) -> str:
         used = 0
@@ -249,7 +258,7 @@ class VeyraShell:
             self.warn(f"Context window: dropped {dropped} oldest message{'s' if dropped != 1 else ''}.")
         if append_user and self.chat:
             self.chat.message("user", text)
-        print(self.theme.text("assistant_prompt", f"{self.assistant_name()} \u203a "), end="", flush=True)
+        self.write_output(self.theme.text("assistant_prompt", f"{self.assistant_name()} \u203a "), end="", flush=True)
         chunks: list[str] = []
         start = time.perf_counter()
         first_token_at: float | None = None
@@ -263,7 +272,7 @@ class VeyraShell:
                     first_token_at = time.perf_counter()
                 generated_tokens += 1
                 chunks.append(delta)
-                print(delta, end="", flush=True)
+                self.write_output(delta, end="", flush=True)
         except KeyboardInterrupt:
             self.warn("\n[generation stopped]")
         except UnsupportedModelError as exc:
@@ -271,7 +280,7 @@ class VeyraShell:
         except Exception as exc:
             self.error(f"\nGeneration failed: {exc}")
         finally:
-            print("")
+            self.write_output("")
             if self.config.get("stats", False):
                 self.print_generation_stats(start, first_token_at, generated_tokens)
             if chunks and self.chat:
@@ -346,7 +355,7 @@ class VeyraShell:
         elif cmd == "/chat":
             self.chat_command(args)
         elif cmd == "/update":
-            update_message(self.theme)
+            update_message(self.theme, output=self.write_output)
         else:
             self.error(f"Unknown command: {cmd}. Type /help.")
         return False
@@ -368,7 +377,7 @@ class VeyraShell:
             ("/status", " /doctor  /clear  /help  /exit  /quit"),
         ]
         for command, rest in rows:
-            print(self.theme.text("command", command) + (" " + rest if rest else ""))
+            self.write_output(self.theme.text("command", command) + (" " + rest if rest else ""))
 
     def hf_command(self, args: list[str]) -> None:
         action = args[0].lower() if args else "status"
@@ -378,9 +387,9 @@ class VeyraShell:
         if action == "login":
             self.warn("Create a read or fine-grained read token at https://huggingface.co/settings/tokens")
             try:
-                status = login_hf_read_only(getpass.getpass("HF read token: "))
+                status = login_hf_read_only(self.ask_secret("HF read token: "))
             except (EOFError, KeyboardInterrupt):
-                print("")
+                self.write_output("")
                 self.warn("Login cancelled.")
                 return
             except Exception as exc:
@@ -408,12 +417,12 @@ class VeyraShell:
             self.warn("Hugging Face: not signed in")
             self.error(status["error"])
             return
-        print(self.theme.text("label", "account    ") + self.theme.text("value", status["username"]))
-        print(self.theme.text("label", "token      ") + self.theme.text("value", status["token_name"]))
+        self.write_output(self.theme.text("label", "account    ") + self.theme.text("value", status["username"]))
+        self.write_output(self.theme.text("label", "token      ") + self.theme.text("value", status["token_name"]))
         role = self.hf_role_label(status)
         role_style = "success" if status["read_only"] else "warning"
-        print(self.theme.text("label", "permission ") + self.theme.text(role_style, role))
-        print(self.theme.text("label", "source     ") + self.theme.text("value", status["source"]))
+        self.write_output(self.theme.text("label", "permission ") + self.theme.text(role_style, role))
+        self.write_output(self.theme.text("label", "source     ") + self.theme.text("value", status["source"]))
 
     @staticmethod
     def hf_role_label(status: dict) -> str:
@@ -431,20 +440,20 @@ class VeyraShell:
             state = "ready" if self.runner else "unloaded"
         self.banner(state)
         if show_chat:
-            print(self.theme.text("label", "chat   ") + self.theme.text("value", str(self.chat.path if self.chat else "none")))
-            print(self.theme.text("label", "device ") + self.theme.text("value", normalize_device(self.config.get("device"))))
-            print(self.theme.text("label", "stats  ") + self.theme.text("value", "on" if self.config.get("stats", False) else "off"))
+            self.write_output(self.theme.text("label", "chat   ") + self.theme.text("value", str(self.chat.path if self.chat else "none")))
+            self.write_output(self.theme.text("label", "device ") + self.theme.text("value", normalize_device(self.config.get("device"))))
+            self.write_output(self.theme.text("label", "stats  ") + self.theme.text("value", "on" if self.config.get("stats", False) else "off"))
 
     def theme_command(self, args: list[str]) -> None:
         if not args:
-            print(self.theme.text("label", "theme  ") + self.theme.text("value", normalize_theme(self.config.get("theme"))))
-            print(self.theme.text("muted", "available: ") + " ".join(self.theme.text("command", name) for name in THEMES))
+            self.write_output(self.theme.text("label", "theme  ") + self.theme.text("value", normalize_theme(self.config.get("theme"))))
+            self.write_output(self.theme.text("muted", "available: ") + " ".join(self.theme.text("command", name) for name in THEMES))
             return
         if args[0] == "help":
             self.warn("Usage: /theme [list|" + "|".join(THEMES) + "]")
             return
         if args[0] == "list":
-            print(" ".join(self.theme.text("command", name) for name in THEMES))
+            self.write_output(" ".join(self.theme.text("command", name) for name in THEMES))
             return
         if args[0] not in THEMES:
             self.error(f"Unknown theme: {args[0]}")
@@ -484,9 +493,9 @@ class VeyraShell:
         self.warn("Usage: /profile [show|name NAME|mode MODE]")
 
     def profile_show(self) -> None:
-        print(self.theme.text("label", "name   ") + self.theme.text("value", self.assistant_name()))
-        print(self.theme.text("label", "model  ") + self.theme.text("value", self.config.get("current_model") or "none"))
-        print(self.theme.text("label", "mode   ") + self.theme.text("value", self.config.get("current_mode", "chatml")))
+        self.write_output(self.theme.text("label", "name   ") + self.theme.text("value", self.assistant_name()))
+        self.write_output(self.theme.text("label", "model  ") + self.theme.text("value", self.config.get("current_model") or "none"))
+        self.write_output(self.theme.text("label", "mode   ") + self.theme.text("value", self.config.get("current_mode", "chatml")))
         defaults = self.config.get("defaults", {})
         for label, key in (
             ("tokens", "max_new_tokens"),
@@ -504,21 +513,21 @@ class VeyraShell:
                 shown = f"auto ({self.current_model_limit() or 'unknown'})"
             else:
                 shown = str(value)
-            print(self.theme.text("label", label.ljust(9)) + self.theme.text("value", shown))
+            self.write_output(self.theme.text("label", label.ljust(9)) + self.theme.text("value", shown))
 
     def device_command(self, args: list[str]) -> None:
         current = normalize_device(self.config.get("device"))
         if not args:
-            print(self.theme.text("label", "device ") + self.theme.text("value", current))
+            self.write_output(self.theme.text("label", "device ") + self.theme.text("value", current))
             available = available_devices()
-            print(self.theme.text("muted", "available: ") + " ".join(self.theme.text("command", name) for name in available))
+            self.write_output(self.theme.text("muted", "available: ") + " ".join(self.theme.text("command", name) for name in available))
             return
         if args[0] == "list":
             for name, provider, is_available in device_rows():
                 mark = "*" if name == current else " "
                 status = "available" if is_available else "unavailable"
                 role = "success" if is_available else "muted"
-                print(
+                self.write_output(
                     f"{mark} "
                     + self.theme.text("command", name.ljust(8))
                     + " "
@@ -529,7 +538,7 @@ class VeyraShell:
             return
         if args[0] == "help":
             target = normalize_device(args[1] if len(args) > 1 else current)
-            print(self.theme.text("label", target + " ") + self.theme.text("value", provider_for_device(target)))
+            self.write_output(self.theme.text("label", target + " ") + self.theme.text("value", provider_for_device(target)))
             self.warn(device_install_hint(target))
             return
         selected = normalize_device(args[0])
@@ -554,7 +563,7 @@ class VeyraShell:
 
     def stats_command(self, args: list[str]) -> None:
         if not args:
-            print(self.theme.text("label", "stats  ") + self.theme.text("value", "on" if self.config.get("stats", False) else "off"))
+            self.write_output(self.theme.text("label", "stats  ") + self.theme.text("value", "on" if self.config.get("stats", False) else "off"))
             return
         if args[0] not in {"on", "off"}:
             self.warn("Usage: /stats [on|off]")
@@ -616,7 +625,7 @@ class VeyraShell:
         for name, entry in models(self.config).items():
             mark = "*" if name == current else " "
             details = f"{entry.get('source', 'unknown')}, {entry.get('runtime', 'onnx')}"
-            print(f"{mark} {self.theme.text('value', name)} {self.theme.text('muted', '(' + details + ')')}")
+            self.write_output(f"{mark} {self.theme.text('value', name)} {self.theme.text('muted', '(' + details + ')')}")
 
     def remove_model_command(self, name: str) -> None:
         installed = models(self.config)
@@ -655,7 +664,7 @@ class VeyraShell:
             choices = self.remote_list()
             if not choices:
                 return
-            raw = input("Select model number: ").strip()
+            raw = self.ask("Select model number: ").strip()
             if not raw.isdigit() or not (1 <= int(raw) <= len(choices)):
                 self.warn("Cancelled.")
                 return
@@ -701,14 +710,14 @@ class VeyraShell:
             return None
         if len(choices) == 1:
             return choices[0][0], choices[0][1]
-        print(self.theme.text("label", "Available runtimes and variants:"))
+        self.write_output(self.theme.text("label", "Available runtimes and variants:"))
         for idx, (_, _, label) in enumerate(choices, 1):
-            print(
+            self.write_output(
                 f"{self.theme.text('label', str(idx) + '.')} "
                 f"{self.theme.text('value', label)}"
             )
         default = next((idx for idx, item in enumerate(choices, 1) if item[0] == "transformers"), 1)
-        raw = input(f"Select runtime number [{default}]: ").strip()
+        raw = self.ask(f"Select runtime number [{default}]: ").strip()
         if not raw:
             return choices[default - 1][0], choices[default - 1][1]
         if not raw.isdigit() or not (1 <= int(raw) <= len(choices)):
@@ -727,7 +736,7 @@ class VeyraShell:
             self.warn("No compatible ONNX or Transformers models found in veyra-ai.")
             return []
         for idx, item in enumerate(choices, 1):
-            print(f"{self.theme.text('label', str(idx) + '.')} {self.theme.text('value', item['repo_id'])}")
+            self.write_output(f"{self.theme.text('label', str(idx) + '.')} {self.theme.text('value', item['repo_id'])}")
         return choices
 
     def update_models(self, all_models: bool = False) -> None:
@@ -823,7 +832,7 @@ class VeyraShell:
             first = next(runner.generate(prompt, max_new_tokens=1, temperature=0), "")
             total = time.perf_counter() - start
             self.success(f"test ok: {target}")
-            print(self.theme.text("muted", f"load {load_s:.2f}s | first token {time.perf_counter() - gen_start:.2f}s | total {total:.2f}s | token {first!r}"))
+            self.write_output(self.theme.text("muted", f"load {load_s:.2f}s | first token {time.perf_counter() - gen_start:.2f}s | total {total:.2f}s | token {first!r}"))
         except Exception as exc:
             self.error(f"test failed: {exc}")
 
@@ -833,9 +842,9 @@ class VeyraShell:
             self.warn("No current model.")
             return
         if entry.get("runtime", "onnx") == "transformers":
-            print(format_transformers_inspection(Path(entry["path"])))
+            self.write_output(format_transformers_inspection(Path(entry["path"])))
         else:
-            print(format_inspection(inspect_model(entry["path"])))
+            self.write_output(format_inspection(inspect_model(entry["path"])))
 
     def model_info(self, name: str | None = None) -> None:
         target = name or self.config.get("current_model")
@@ -884,7 +893,7 @@ class VeyraShell:
             "generation": self.generation_summary(entry),
         }
         for label, value in rows.items():
-            print(self.theme.text("label", label.ljust(13)) + self.theme.text("value", str(value)))
+            self.write_output(self.theme.text("label", label.ljust(13)) + self.theme.text("value", str(value)))
 
     def model_trust_command(self, args: list[str]) -> None:
         name, entry = current_model_entry(self.config)
@@ -893,7 +902,7 @@ class VeyraShell:
             return
         if not args:
             state = "on" if entry.get("trust_remote_code", False) else "off"
-            print(self.theme.text("label", "custom code ") + self.theme.text("value", state))
+            self.write_output(self.theme.text("label", "custom code ") + self.theme.text("value", state))
             return
         state = args[0].lower()
         if state not in {"on", "off"}:
@@ -909,7 +918,7 @@ class VeyraShell:
 
     def mode_command(self, args: list[str]) -> None:
         if not args:
-            print(self.theme.text("label", "mode   ") + self.theme.text("value", self.config.get("current_mode", "chatml")))
+            self.write_output(self.theme.text("label", "mode   ") + self.theme.text("value", self.config.get("current_mode", "chatml")))
             return
         mode = normalize_mode(args[0])
         if args[0] != mode and args[0] not in PROMPT_MODES:
@@ -927,7 +936,7 @@ class VeyraShell:
 
     def autoload_command(self, args: list[str]) -> None:
         if not args:
-            print(self.theme.text("label", "autoload ") + self.theme.text("value", str(self.config.get("autoload", True))))
+            self.write_output(self.theme.text("label", "autoload ") + self.theme.text("value", str(self.config.get("autoload", True))))
             return
         self.config["autoload"] = args[0] == "on"
         save_config(self.config)
@@ -953,7 +962,7 @@ class VeyraShell:
                 shown = str(value) if value is not None else "random"
             else:
                 shown = str(value)
-            print(self.theme.text("label", key + ": ") + self.theme.text("value", shown))
+            self.write_output(self.theme.text("label", key + ": ") + self.theme.text("value", shown))
             return
         raw = args[0].lower()
         if key in {"seed", "context_length"} and raw in {"auto", "random", "off"}:
@@ -1115,18 +1124,18 @@ class VeyraShell:
     def doctor_row(self, ok: bool, label: str, detail: str, warning: bool = False) -> None:
         symbol = "!" if warning else ("OK" if ok else "FAIL")
         role = "warning" if warning else ("success" if ok else "error")
-        print(self.theme.text(role, symbol.ljust(5)) + self.theme.text("label", label.ljust(14)) + self.theme.text("value", detail))
+        self.write_output(self.theme.text(role, symbol.ljust(5)) + self.theme.text("label", label.ljust(14)) + self.theme.text("value", detail))
 
     def chat_command(self, args: list[str]) -> None:
         action = args[0] if args else ""
         if action in {"", "path"}:
-            print(self.theme.text("label", "chat   ") + self.theme.text("value", str(self.chat.path if self.chat else "No chat.")))
+            self.write_output(self.theme.text("label", "chat   ") + self.theme.text("value", str(self.chat.path if self.chat else "No chat.")))
         elif action == "new":
             self.chat = ChatStore.new(self.config.get("current_model"), self.config.get("current_mode", "chatml"))
             self.success(f"New chat: {self.chat.path.stem}")
         elif action == "list":
             for path in ChatStore.list():
-                print(self.theme.text("value", path.stem))
+                self.write_output(self.theme.text("value", path.stem))
         elif action == "load" and len(args) >= 2:
             chat = ChatStore.named(args[1])
             if chat:
@@ -1146,16 +1155,16 @@ class VeyraShell:
         body += self.theme.text("muted", ", ").join(self.theme.text("command", command) for command in commands)
         if suffix:
             body += self.theme.text("muted", " " + suffix)
-        print(body)
+        self.write_output(body)
 
     def success(self, message: str) -> None:
-        print(self.theme.text("success", message))
+        self.write_output(self.theme.text("success", message))
 
     def warn(self, message: str) -> None:
-        print(self.theme.text("warning", message))
+        self.write_output(self.theme.text("warning", message))
 
     def error(self, message: str) -> None:
-        print(self.theme.text("error", message))
+        self.write_output(self.theme.text("error", message))
 
     def print_generation_stats(self, start: float, first_token_at: float | None, generated_tokens: int) -> None:
         end = time.perf_counter()
@@ -1164,7 +1173,7 @@ class VeyraShell:
         speed = generated_tokens / elapsed if elapsed > 0 and generated_tokens else 0.0
         device = normalize_device(self.config.get("device"))
         text = f"stats: {generated_tokens} tokens | {speed:.2f} tok/s | first token {ttft:.2f}s | total {elapsed:.2f}s | device {device}"
-        print(self.theme.text("muted", text))
+        self.write_output(self.theme.text("muted", text))
 
     def assistant_name(self) -> str:
         return str(self.config.get("assistant_name") or "Veyra")
@@ -1238,16 +1247,16 @@ class VeyraShell:
 
     def clear_visible_screen(self, force: bool = False) -> None:
         if sys.stdout.isatty() and os.environ.get("TERM") != "dumb":
-            print("\033[2J\033[H", end="")
+            self.write_output("\033[2J\033[H", end="")
 
 
-def update_message(theme=None) -> None:
+def update_message(theme=None, output=print) -> None:
     def style(role: str, value: str) -> str:
         return theme.text(role, value) if theme else value
 
-    print(style("muted", "Install the latest Veyra CLI from GitHub with one of:"))
-    print("  " + style("command", "uv tool install git+https://github.com/Jdudeo5972/veyra-cli.git"))
-    print("  " + style("command", "pipx install git+https://github.com/Jdudeo5972/veyra-cli.git"))
+    output(style("muted", "Install the latest Veyra CLI from GitHub with one of:"))
+    output("  " + style("command", "uv tool install git+https://github.com/Jdudeo5972/veyra-cli.git"))
+    output("  " + style("command", "pipx install git+https://github.com/Jdudeo5972/veyra-cli.git"))
 
 
 def _prefer_utf8_stdio() -> None:
