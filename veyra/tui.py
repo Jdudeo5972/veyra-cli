@@ -7,20 +7,22 @@ import time
 from pathlib import Path
 
 from prompt_toolkit.document import Document
+from prompt_toolkit.completion import Completion
 from prompt_toolkit.history import FileHistory
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message
 from textual.screen import ModalScreen
-from textual.suggester import Suggester
 from textual.theme import Theme as TextualTheme
-from textual.widgets import Button, Footer, Input, Label, Markdown, OptionList, Static
+from textual.widgets import Button, Input, Label, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from . import __version__
-from .completion import VeyraCompleter
+from .completion import TOP, VeyraCompleter
+from .clipboard import read_clipboard, write_clipboard
 from .prompts import PROMPT_MODES
 from .registry import HISTORY_PATH, models
 from .runner import device_rows, model_context_length
@@ -114,13 +116,14 @@ class Question(ModalScreen[str | None]):
 
 
 class ChatMessage(Vertical):
-    def __init__(self, role: str, content: str = "", streaming: bool = False) -> None:
-        super().__init__(classes="chat-message")
+    def __init__(self, role: str, content: str = "", streaming: bool = False, user: bool = False) -> None:
+        super().__init__(classes="chat-message user-message" if user else "chat-message assistant-message")
         self.role, self.content, self.streaming = role, content, streaming
+        self.user = user
 
     def compose(self) -> ComposeResult:
         yield Static(Text(self.role + " \u203a"), classes="message-role")
-        if self.streaming or self.role == "You":
+        if self.streaming or self.user:
             yield Static(Text(self.content), classes="message-body")
         else:
             yield Markdown(self.content, open_links=False, classes="message-body")
@@ -135,13 +138,47 @@ class ChatMessage(Vertical):
         await self.mount(Markdown(self.content, open_links=False, classes="message-body"))
 
 
-class Composer(Input):
+class Composer(TextArea):
+    class Submitted(Message):
+        def __init__(self, composer: Composer) -> None:
+            super().__init__()
+            self.composer = composer
+            self.value = composer.value
+
+        @property
+        def control(self) -> Composer:
+            return self.composer
+
     BINDINGS = [
+        Binding("enter", "submit", "Send", priority=True),
+        Binding("shift+enter,ctrl+j", "newline", "New line", show=False, priority=True),
         Binding("tab", "complete", "Complete", priority=True),
         Binding("up", "previous", "Previous", show=False, priority=True),
         Binding("down", "next", "Next", show=False, priority=True),
         Binding("escape", "stop", "Stop", show=False, priority=True),
     ]
+
+    @property
+    def value(self) -> str:
+        return self.text
+
+    @value.setter
+    def value(self, value: str) -> None:
+        self.load_text(value)
+
+    @property
+    def cursor_position(self) -> int:
+        return self.document.get_index_from_location(self.cursor_location)
+
+    @cursor_position.setter
+    def cursor_position(self, value: int) -> None:
+        self.move_cursor(self.document.get_location_from_index(value))
+
+    def action_submit(self) -> None:
+        self.post_message(self.Submitted(self))
+
+    def action_newline(self) -> None:
+        self.insert("\n")
 
     def action_complete(self) -> None:
         self.app.complete_command()
@@ -154,17 +191,6 @@ class Composer(Input):
 
     def action_stop(self) -> None:
         self.app.action_stop()
-
-
-class HistorySuggester(Suggester):
-    def __init__(self, history: list[str]) -> None:
-        super().__init__(use_cache=False, case_sensitive=True)
-        self.history = history
-
-    async def get_suggestion(self, value: str) -> str | None:
-        if value and not value.startswith("/"):
-            return next((line for line in reversed(self.history) if line.startswith(value) and line != value), None)
-        return None
 
 
 class TuiShell(VeyraShell):
@@ -198,6 +224,18 @@ class TuiShell(VeyraShell):
 
     def banner(self, state: str) -> None:
         self.events.put(("state", state))
+
+    def status(self, show_chat: bool = True) -> None:
+        self.write_output(f"model: {self.config.get('current_model') or 'none'} | mode: {self.config.get('current_mode')}")
+        self.write_output(f"state: {'ready' if self.runner else 'unloaded'} | device: {self.config.get('device', 'cpu')}")
+        self.write_output(self.generation_summary())
+        if show_chat and self.chat:
+            self.write_output(f"chat: {self.chat.path}")
+
+    def help(self) -> None:
+        super().help()
+        self.write_output(self.theme.text("command", "/copy") + " Copy the latest response")
+        self.write_output(self.theme.text("command", "/commands") + " Open the command menu")
 
     def clear_visible_screen(self, force: bool = False) -> None:
         if force:
@@ -265,7 +303,10 @@ class VeyraApp(App):
     BINDINGS = [
         Binding("ctrl+q", "request_quit", "Quit", priority=True),
         Binding("ctrl+d", "request_quit", "Quit", show=False, priority=True),
-        Binding("ctrl+c", "stop", "Stop", priority=True),
+        Binding("ctrl+c", "copy_or_stop", "Copy / stop", priority=True),
+        Binding("ctrl+shift+c", "copy_selection", "Copy", show=False, priority=True),
+        Binding("ctrl+v,ctrl+shift+v,shift+insert", "paste", "Paste", show=False, priority=True),
+        Binding("ctrl+p", "commands", "Commands", priority=True),
         Binding("f2", "models", "Models"),
         Binding("f3", "chats", "Chats"),
         Binding("f4", "settings", "Settings"),
@@ -290,21 +331,41 @@ class VeyraApp(App):
         self.completer = VeyraCompleter(lambda: sorted(models(self.backend.config)), self.backend.chat_names)
 
     def compose(self) -> ComposeResult:
-        yield Static(id="heading", markup=False)
-        yield Static(id="status", markup=False)
-        with Horizontal(id="toolbar"):
-            yield Button("Models", id="models")
-            yield Button("Chats", id="chats")
-            yield Button("Settings", id="settings")
-            yield Button("New chat", id="new-chat")
-            yield Button("Stop", id="stop", disabled=True)
-        yield VerticalScroll(id="conversation")
-        yield Static("", id="metrics", markup=False)
-        yield OptionList(id="completions")
-        with Horizontal(id="composer-row"):
-            yield Label("You \u203a", id="user-label")
-            yield Composer(id="composer", select_on_focus=False, suggester=HistorySuggester(self.history))
-        yield Footer()
+        with Vertical(id="workspace", classes="home"):
+            yield Static(self.wordmark(), id="wordmark")
+            yield VerticalScroll(id="conversation")
+            with Horizontal(id="prompt-wrapper"):
+                with Vertical(id="prompt-area"):
+                    yield OptionList(id="completions")
+                    with Vertical(id="composer-panel"):
+                        yield Composer(
+                            id="composer", show_line_numbers=False, highlight_cursor_line=False,
+                            placeholder="Ask anything...", soft_wrap=True,
+                        )
+                        yield Static(id="model-line", markup=False)
+                    with Horizontal(id="input-hints"):
+                        yield Static("", id="metrics", markup=False)
+                        yield Static("ctrl+p commands", id="shortcuts", markup=False)
+        with Horizontal(id="session-bar"):
+            yield Static(id="session-info", markup=False)
+            yield Static(f"v{__version__}", id="version-info", markup=False)
+
+    @staticmethod
+    def wordmark() -> Text:
+        letters = [
+            ["#   #", "#   #", "#   #", " # # ", "  #  "],
+            ["#####", "#    ", "#### ", "#    ", "#####"],
+            ["#   #", " # # ", "  #  ", "  #  ", "  #  "],
+            ["#### ", "#   #", "#### ", "#  # ", "#   #"],
+            [" ### ", "#   #", "#####", "#   #", "#   #"],
+        ]
+        text = Text()
+        for row in range(5):
+            if row:
+                text.append("\n")
+            for index, letter in enumerate(letters):
+                text.append(letter[row].replace("#", "\u2588") + ("  " if index < 4 else ""), style="#777777" if index < 2 else "#eeeeee")
+        return text
 
     async def on_mount(self) -> None:
         self.set_interval(0.05, self.drain_events)
@@ -313,7 +374,7 @@ class VeyraApp(App):
         self.refresh_status()
         self.query_one(Composer).focus()
         if not models(self.backend.config):
-            await self.add_output("No model installed yet. Use /model fetch or /model add PATH.")
+            self.notify("No model installed yet. Use /model fetch or /model add PATH.", timeout=7)
         if not self.args.no_load and self.backend.config.get("autoload", True) and self.backend.current_entry():
             self.start_operation(None)
 
@@ -331,7 +392,7 @@ class VeyraApp(App):
             name=theme_name, primary=accent,
             accent="#efc678" if selected.enabled and selected.name == "rainbow" else accent,
             secondary="#6adbd1" if selected.enabled and selected.name == "rainbow" else accent,
-            foreground="#eeeeee", background="#101012", surface="#19191d", panel="#202025",
+            foreground="#eeeeee", background="#0b0b0b", surface="#1d1d1d", panel="#151515",
             success=accent, warning="#ddbc76" if selected.enabled else "#eeeeee",
             error="#ef7777" if selected.enabled else "#eeeeee",
         ))
@@ -340,7 +401,6 @@ class VeyraApp(App):
     def refresh_status(self) -> None:
         config = self.backend.config
         defaults = config.get("defaults", {})
-        self.query_one("#heading", Static).update(Text(f"Veyra v{__version__}   /   {self.state}"))
         entry = self.backend.current_entry()
         if self.backend.runner:
             limit = self.backend.runner.max_context_length
@@ -351,17 +411,27 @@ class VeyraApp(App):
             limit = None
         context = defaults.get("context_length") or limit or "unknown"
         auto = " (auto)" if defaults.get("context_length") is None else ""
-        rows = [
-            f"Model: {config.get('current_model') or 'none'}   Mode: {config.get('current_mode', 'chatml')}",
-            f"{self.backend.current_runtime_label()} / {config.get('device', 'cpu')}   "
+        line = Text()
+        line.append(config.get("current_mode", "chatml"), style=self.current_theme.primary)
+        line.append("  \u00b7  ", style="dim")
+        line.append(config.get("current_model") or "No model selected")
+        line.append(f"  {self.backend.current_runtime_label()}", style="dim")
+        self.query_one("#model-line", Static).update(line)
+        self.query_one("#model-line").tooltip = (
             f"output:{defaults.get('max_new_tokens')}  temp:{defaults.get('temperature')}  "
-            f"top-k:{defaults.get('top_k')}  top-p:{defaults.get('top_p')}  repeat:{defaults.get('repetition_penalty')}",
-            f"context:{context}{auto}   autoload:{'on' if config.get('autoload', True) else 'off'}   "
-            f"chat:{self.backend.chat.path.stem if self.backend.chat else 'none'}",
-        ]
-        self.query_one("#status", Static).update(Text("\n".join(rows)))
+            f"top-k:{defaults.get('top_k')}  top-p:{defaults.get('top_p')}  "
+            f"repeat:{defaults.get('repetition_penalty')}  context:{context}{auto}"
+        )
+        session = self.backend.chat.path.stem if self.backend.chat else "new chat"
+        self.query_one("#session-info", Static).update(Text(f"{self.state}  \u00b7  {config.get('device', 'cpu')}  \u00b7  {session}"))
+
+    def set_conversation_mode(self, active: bool) -> None:
+        workspace = self.query_one("#workspace")
+        workspace.set_class(not active, "home")
+        workspace.set_class(active, "conversation-mode")
 
     async def add_output(self, value: str) -> None:
+        self.set_conversation_mode(True)
         view = self.query_one("#conversation", VerticalScroll)
         at_end = view.is_vertical_scroll_end
         await view.mount(Static(Text.from_ansi(value.rstrip()), classes="command-output"))
@@ -369,11 +439,12 @@ class VeyraApp(App):
             view.scroll_end(animate=False)
 
     async def show_conversation(self, history: list[dict[str, str]]) -> None:
+        self.set_conversation_mode(bool(history))
         view = self.query_one("#conversation", VerticalScroll)
         await view.remove_children()
         for message in history:
             role = "You" if message["role"] == "user" else self.backend.assistant_name()
-            await view.mount(ChatMessage(role, message["content"]))
+            await view.mount(ChatMessage(role, message["content"], user=message["role"] == "user"))
         view.scroll_end(animate=False)
 
     async def drain_events(self) -> None:
@@ -394,7 +465,8 @@ class VeyraApp(App):
             elif kind == "conversation":
                 await self.show_conversation(data)
             elif kind == "user":
-                await self.query_one("#conversation").mount(ChatMessage("You", data))
+                self.set_conversation_mode(True)
+                await self.query_one("#conversation").mount(ChatMessage("You", data, user=True))
             elif kind == "assistant":
                 self.response = ChatMessage(data, streaming=True)
                 await self.query_one("#conversation").mount(self.response)
@@ -408,6 +480,7 @@ class VeyraApp(App):
                 self.refresh_status()
             elif kind == "clear":
                 await self.query_one("#conversation").remove_children()
+                self.set_conversation_mode(False)
             elif kind == "question":
                 prompt, secret, answer = data
                 if not self.stop_requested.is_set():
@@ -437,8 +510,7 @@ class VeyraApp(App):
         self.busy = busy
         if busy:
             self.query_one("#completions").display = False
-        for button in self.query("#toolbar Button"):
-            button.disabled = not busy if button.id == "stop" else busy
+        self.query_one("#shortcuts", Static).update("esc interrupt  ctrl+p commands" if busy else "ctrl+p commands")
 
     def start_operation(self, text: str | None) -> None:
         if self.busy:
@@ -469,14 +541,20 @@ class VeyraApp(App):
         finally:
             self.events.put(("finished", None))
 
-    @on(Input.Changed, "#composer")
+    @on(Composer.Changed, "#composer")
     def composer_changed(self) -> None:
         field = self.query_one(Composer)
+        field.styles.height = min(6, max(2, len(field.value.splitlines()) + int(field.value.endswith("\n"))))
         document = Document(field.value, cursor_position=field.cursor_position)
         self.completions = list(self.completer.get_completions(document, None))[:30]
+        if field.value.startswith("/") and " " not in field.value:
+            for command, description in {"/copy": "Copy the last response", "/commands": "Open commands"}.items():
+                if command.startswith(field.value):
+                    self.completions.append(Completion(command, start_position=-len(field.value), display_meta=description))
         options = self.query_one("#completions", OptionList)
         options.clear_options()
         options.display = bool(self.completions) and not self.busy
+        self.query_one("#workspace").set_class(options.display, "completing")
         for item in self.completions:
             label = Text(item.text)
             label.append("  " + item.display_meta_text, style="dim")
@@ -484,8 +562,8 @@ class VeyraApp(App):
         if self.completions:
             options.highlighted = 0
 
-    @on(Input.Submitted, "#composer")
-    def submit(self, event: Input.Submitted) -> None:
+    @on(Composer.Submitted, "#composer")
+    def submit(self, event: Composer.Submitted) -> None:
         if self.query_one("#completions").display:
             self.complete_command()
             return
@@ -507,6 +585,10 @@ class VeyraApp(App):
             self.action_models()
         elif text == "/chat":
             self.action_chats()
+        elif text == "/copy":
+            self.action_copy_response()
+        elif text == "/commands":
+            self.action_commands()
         else:
             self.start_operation(text)
 
@@ -546,6 +628,12 @@ class VeyraApp(App):
                 options.action_cursor_down()
             return
         field = self.query_one(Composer)
+        if "\n" in field.value:
+            if direction < 0:
+                field.action_cursor_up()
+            else:
+                field.action_cursor_down()
+            return
         if self.history_index == len(self.history):
             self.draft = field.value
         self.history_index = min(len(self.history), max(0, self.history_index + direction))
@@ -570,6 +658,96 @@ class VeyraApp(App):
 
     def on_unmount(self) -> None:
         self.stop_requested.set()
+
+    def copy_to_clipboard(self, text: str) -> None:
+        if write_clipboard(text):
+            self._clipboard = text
+        else:
+            super().copy_to_clipboard(text)
+
+    def selected_text(self) -> str:
+        if isinstance(self.focused, Input) and self.focused.password:
+            return ""
+        selected = self.screen.get_selected_text()
+        if selected:
+            return selected
+        focused = self.focused
+        if isinstance(focused, (Input, TextArea)):
+            return focused.selected_text
+        return ""
+
+    def action_copy_selection(self) -> None:
+        selected = self.selected_text()
+        if selected:
+            self.copy_to_clipboard(selected)
+            self.notify("Copied")
+
+    def action_copy_or_stop(self) -> None:
+        if self.selected_text():
+            self.action_copy_selection()
+        else:
+            self.action_stop()
+
+    def action_copy_response(self) -> None:
+        content = self.response.content if self.response else next(
+            (item["content"] for item in reversed(self.backend.chat.history()) if item["role"] == "assistant"), ""
+        )
+        if content:
+            self.copy_to_clipboard(content)
+            self.notify("Response copied")
+        else:
+            self.notify("No response to copy", severity="warning")
+
+    def action_paste(self) -> None:
+        focused = self.focused
+        if not isinstance(focused, (Input, TextArea)):
+            focused = self.query_one(Composer)
+            focused.focus()
+        text = read_clipboard()
+        if text is None:
+            text = self.clipboard
+        if not text:
+            return
+        if isinstance(focused, TextArea):
+            result = focused.replace(text.replace("\r\n", "\n"), *focused.selection)
+            focused.move_cursor(result.end_location)
+        else:
+            focused.replace(text.replace("\r\n", "\n").replace("\n", " "), *focused.selection)
+
+    def on_mouse_down(self, event) -> None:
+        if event.button == 3:
+            if self.selected_text():
+                self.action_copy_selection()
+            else:
+                self.action_paste()
+            event.stop()
+
+    def action_commands(self) -> None:
+        items = [("Copy last response", "ui:copy")]
+        if self.busy:
+            items += [("Stop generation", "ui:stop"), ("Quit", "ui:quit")]
+        else:
+            items += [("Models", "ui:models"), ("Chats", "ui:chats"), ("Settings", "ui:settings"),
+                      ("New chat", "/chat new")]
+            items += [(f"{command}  {description}", command) for command, description in TOP.items()]
+        self.push_screen(Picker("Commands", items), self.command_selected)
+
+    def command_selected(self, command: str | None) -> None:
+        if not command:
+            return
+        actions = {
+            "ui:copy": self.action_copy_response, "ui:stop": self.action_stop,
+            "ui:quit": self.action_request_quit, "ui:models": self.action_models,
+            "ui:chats": self.action_chats, "ui:settings": self.action_settings,
+            "/exit": self.action_request_quit, "/quit": self.action_request_quit,
+        }
+        if command in actions:
+            actions[command]()
+        else:
+            field = self.query_one(Composer)
+            field.value = command + " "
+            field.cursor_position = len(field.value)
+            field.focus()
 
     def action_models(self) -> None:
         if self.busy:
@@ -625,11 +803,3 @@ class VeyraApp(App):
             self.push_screen(Picker(command[1:], [(value, f"{command} {value}") for value in choices]), self.run_selection)
         else:
             self.push_screen(Question(command[1:]), lambda value: self.run_selection(f"{command} {value}") if value is not None else None)
-
-    @on(Button.Pressed)
-    def toolbar_pressed(self, event: Button.Pressed) -> None:
-        actions = {"models": self.action_models, "chats": self.action_chats, "settings": self.action_settings,
-                   "new-chat": self.action_new_chat, "stop": self.action_stop}
-        action = actions.get(event.button.id)
-        if action:
-            action()

@@ -6,6 +6,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from textual.widgets import Input, OptionList
+from textual.widgets.text_area import Selection as EditorSelection
+from textual.selection import Selection
+from textual.geometry import Offset
+from textual import events
 
 from veyra.chat_store import ChatStore
 from veyra.registry import default_config
@@ -197,7 +201,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.config["theme"], "warm")
             self.assertEqual(app.current_theme.primary, "#CE562F")
             self.assertEqual(app.theme, "veyra-ui-warm")
-            color = app.query_one("#heading").styles.color
+            color = app.query_one("#composer-panel").styles.border_left[1]
             self.assertLessEqual(abs(color.r - 206) + abs(color.g - 86) + abs(color.b - 47), 3)
             await pilot.resize_terminal(60, 24)
             await pilot.pause()
@@ -223,6 +227,71 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 login.assert_called_once_with("test-secret-not-a-real-token")
                 self.assertNotIn("test-secret", " ".join(app.history))
                 self.assertFalse((self.root / "history.txt").exists())
+
+    async def test_multiline_system_paste_does_not_submit(self):
+        self.install_fake_model()
+        app = self.app()
+        app.backend.runner = FakeRunner()
+        with patch("veyra.tui.read_clipboard", return_value="second\r\nthird"):
+            async with app.run_test(size=(100, 34)) as pilot:
+                field = app.query_one(Composer)
+                field.value = "first"
+                field.cursor_position = 5
+                await pilot.press("shift+enter", "ctrl+v")
+                await pilot.pause()
+                self.assertEqual(field.value, "first\nsecond\nthird")
+                self.assertFalse(app.busy)
+                self.assertEqual(self.chat.history(), [])
+                await pilot.press("enter")
+                await self.wait_idle(app, pilot)
+                self.assertEqual(self.chat.history()[0]["content"], "first\nsecond\nthird")
+
+    async def test_copy_selection_takes_priority_over_stop(self):
+        app = self.app()
+        with patch("veyra.tui.write_clipboard", return_value=True) as copy:
+            async with app.run_test(size=(100, 34)) as pilot:
+                field = app.query_one(Composer)
+                field.value = "copy this"
+                field.selection = EditorSelection((0, 0), (0, 4))
+                app.set_busy(True)
+                await pilot.press("ctrl+c")
+                copy.assert_called_once_with("copy")
+                self.assertFalse(app.stop_requested.is_set())
+                field.move_cursor((0, 9))
+                await pilot.press("ctrl+c")
+                self.assertTrue(app.stop_requested.is_set())
+                app.set_busy(False)
+
+    async def test_response_selection_and_copy_last_response(self):
+        self.chat.message("user", "hello")
+        self.chat.message("assistant", "A response with **formatting**.")
+        app = self.app()
+        with patch("veyra.tui.write_clipboard", return_value=True) as copy:
+            async with app.run_test(size=(100, 34)) as pilot:
+                body = app.query_one(".user-message .message-body")
+                app.screen.selections = {body: Selection(Offset(0, 0), Offset(5, 0))}
+                await pilot.press("ctrl+shift+c")
+                copy.assert_called_with("hello")
+                app.clear_selection()
+                app.action_copy_response()
+                copy.assert_called_with("A response with **formatting**.")
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                self.assertIsInstance(app.screen, Picker)
+                self.assertEqual(app.screen.heading, "Commands")
+
+    async def test_internal_clipboard_and_terminal_paste_keep_newlines(self):
+        app = self.app()
+        with patch("veyra.tui.write_clipboard", return_value=False), patch("veyra.tui.read_clipboard", return_value=None):
+            async with app.run_test(size=(80, 24)) as pilot:
+                field = app.query_one(Composer)
+                app.copy_to_clipboard("first\nsecond")
+                await pilot.press("ctrl+v")
+                self.assertEqual(field.value, "first\nsecond")
+                field.post_message(events.Paste("\nthird\nfourth"))
+                await pilot.pause()
+                self.assertEqual(field.value, "first\nsecond\nthird\nfourth")
+                self.assertFalse(app.busy)
 
 
 if __name__ == "__main__":

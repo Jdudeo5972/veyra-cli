@@ -85,15 +85,21 @@ uv run veyra tui --no-load
 
 An installed copy uses `veyra tui`. The existing `veyra` REPL remains the default.
 
-The TUI shares the same model registry, generation profiles, themes, history, and autosaved JSONL chats as the REPL. It provides a scrollable conversation with Markdown and highlighted code, a persistent model/status header, and searchable model, chat, and settings pickers. Loading, fetching, and generation run in background workers.
+The TUI shares the same model registry, generation profiles, themes, history, and autosaved JSONL chats as the REPL. An empty chat opens with a centered Veyra wordmark and composer. Conversations use a scrollable Markdown view with highlighted code and a bottom composer showing the active mode, model, and runtime. Loading, fetching, and generation run in background workers.
 
 - F2 opens models; F3 opens chats; F4 opens settings.
+- Ctrl+P opens the searchable command menu.
 - Ctrl+N starts a new chat.
 - Type `/` for commands; Up/Down selects a suggestion, and Tab or Enter completes it. Enter submits a completed command or message.
-- Ctrl+C, Escape, the Stop button, or a double tap of Tab requests a generation stop between model calls. Partial replies are saved.
+- Enter sends; Shift+Enter adds a new line. Pasted text keeps its line breaks and is not submitted automatically.
+- Ctrl+C copies selected text. With no selection, Ctrl+C stops generation. Escape or a double tap of Tab also requests a stop between model calls. Partial replies are saved.
+- Ctrl+Shift+C copies selected text; `/copy` copies the latest response, including its Markdown/code source.
+- Ctrl+V, Shift+Insert, or your terminal's paste shortcut pastes into the focused editor. Right-click copies a selection, or pastes when nothing is selected, when the terminal forwards the click.
 - Ctrl+Q or Ctrl+D exits. If a model operation is running, Veyra requests a stop and exits after the current call returns.
 
 `/model` and `/chat` open their pickers. Other slash commands, including `/model fetch`, `/retry`, `/stats`, `/theme`, and `/doctor`, use the existing shell behavior. Interactive fetch choices and Hugging Face token entry appear in dialogs; token input stays masked and is not saved to command history.
+
+Windows uses the native Unicode clipboard; macOS uses its built-in clipboard commands. Linux uses existing `wl-copy`/`wl-paste`, `xclip`, or `xsel` tools when available, with terminal clipboard output and Veyra's internal clipboard as fallbacks. Over SSH, use the terminal's paste shortcut for text from your local computer. In Windows Terminal, [Shift+drag forces terminal text selection](https://github.com/MicrosoftDocs/terminal/blob/main/TerminalDocs/selection.md) if you prefer the terminal's own copy controls.
 
 For local UI checks without downloading a model:
 

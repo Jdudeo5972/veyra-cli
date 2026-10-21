@@ -2,39 +2,122 @@ Screen {
     background: $background;
     color: $foreground;
 }
-#heading {
-    color: $primary;
-    text-style: bold;
-    height: 1;
-    margin: 1 2 0 2;
+#workspace {
+    width: 100%;
+    height: 1fr;
+    padding: 1 3;
 }
-#status {
-    height: auto;
-    margin: 1 2 0 2;
-    color: $text-muted;
+#workspace.home {
+    align: center middle;
 }
-#toolbar {
-    height: 3;
-    margin: 0 1;
-}
-#toolbar Button {
-    min-width: 9;
-    width: auto;
-    margin: 0 1 0 0;
+#wordmark {
+    height: 5;
+    width: 1fr;
+    content-align: center middle;
+    text-align: center;
+    margin-bottom: 3;
 }
 #conversation {
     height: 1fr;
-    padding: 0 2;
-    border-top: solid $secondary;
+    width: 1fr;
+    scrollbar-size: 1 1;
+}
+.home #conversation {
+    display: none;
+}
+.conversation-mode #wordmark {
+    display: none;
+}
+.home.completing #wordmark {
+    display: none;
+}
+#prompt-area {
+    height: auto;
+    width: 1fr;
+}
+#prompt-wrapper {
+    height: auto;
+    width: 1fr;
+    align: center top;
+}
+.home #prompt-area {
+    width: 78;
+    max-width: 100%;
+}
+.conversation-mode #prompt-area {
+    margin-top: 1;
+}
+#composer-panel {
+    height: auto;
+    background: $surface;
+    border-left: thick $primary;
+    padding: 1 2;
+}
+#composer {
+    height: 2;
+    max-height: 6;
+    min-height: 2;
+    border: none;
+    padding: 0;
+    background: $surface;
+}
+#composer:focus {
+    border: none;
+}
+#model-line {
+    height: auto;
+    margin-top: 1;
+}
+#input-hints {
+    height: auto;
+    min-height: 1;
+    margin-top: 1;
+}
+#metrics {
+    height: auto;
+    width: 1fr;
+    color: $text-muted;
+}
+#shortcuts {
+    height: auto;
+    width: auto;
+    max-width: 50%;
+    color: $text-muted;
+    text-align: right;
+}
+#session-bar {
+    height: 1;
+    margin: 0 3 1 3;
+    color: $text-muted;
+}
+#session-info {
+    width: 1fr;
+    height: 1;
+}
+#version-info {
+    width: auto;
+    height: 1;
+    text-align: right;
 }
 .chat-message {
     height: auto;
-    margin: 1 0;
+    margin-bottom: 2;
+}
+.user-message {
+    background: $panel;
+    border-left: thick $primary;
+    padding: 1 2;
+}
+.user-message .message-role {
+    display: none;
+}
+.assistant-message {
+    padding: 0 2;
 }
 .message-role {
     color: $accent;
-    text-style: bold;
     height: 1;
+    margin-bottom: 1;
 }
 .message-body {
     height: auto;
@@ -52,34 +135,15 @@ MarkdownFence {
 }
 .command-output {
     height: auto;
-    margin: 0 0 1 0;
-}
-#metrics {
-    height: 1;
-    margin: 0 2;
-    color: $text-muted;
+    margin: 0 2 1 2;
 }
 #completions {
     display: none;
     height: auto;
     max-height: 9;
-    margin: 0 2;
-    border: solid $primary-muted;
-}
-#composer-row {
-    height: 3;
-    margin: 0 1;
-}
-#user-label {
-    width: 7;
-    height: 3;
-    content-align: center middle;
-}
-#composer {
-    width: 1fr;
-}
-Footer {
+    border: none;
     background: $surface;
+    margin-bottom: 1;
 }
 ModalScreen {
     align: center middle;
@@ -91,7 +155,7 @@ ModalScreen {
     height: 70%;
     padding: 1 2;
     background: $surface;
-    border: round $primary;
+    border: solid $primary-muted;
 }
 .dialog-title {
     color: $primary;
